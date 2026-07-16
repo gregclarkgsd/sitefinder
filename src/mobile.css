@@ -1,0 +1,9 @@
+@media(max-width:900px){
+  main{overflow:hidden}
+  .table-wrap{overflow-y:auto;overflow-x:hidden}
+  table{min-width:0;table-layout:fixed}
+  th,td{padding:13px 12px}
+  th:nth-child(3),td:nth-child(3),th:nth-child(4),td:nth-child(4),th:nth-child(6),td:nth-child(6),th:nth-child(7),td:nth-child(7){display:none}
+  th:nth-child(1){width:42%}th:nth-child(2){width:37%}th:nth-child(5){width:21%}
+  .reveal{padding:7px 12px}.brand{font-size:19px}
+}
