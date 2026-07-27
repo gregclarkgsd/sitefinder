@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Check, CheckCircle2, Clock3, Mail, MessageSquareText, Phone, Send, ShieldX, SkipForward, X } from 'lucide-react';
+import { Check, CheckCircle2, Clock3, ExternalLink, Mail, MessageSquareText, Phone, Send, ShieldX, SkipForward, X } from 'lucide-react';
 import './outreach.css';
 
 const formatDate = value => value
@@ -130,7 +130,7 @@ function OutreachComposer({lead,suppressed,communications,close,save,syncToAttio
       <label>Message<textarea rows="12" value={body} onChange={event=>setBody(event.target.value)} readOnly={readonly}/></label>
       {suppressed&&<div className="suppressed-warning"><ShieldX size={17}/><strong>This address is on the do-not-contact list and cannot be approved.</strong></div>}
       <div className="composer-history"><h3>Communication history</h3><CommunicationTimeline communications={communications}/></div>
-      {lead.status==='approved'&&<div className="crm-state"><strong>{lead.attio_record_id?'Synced to Attio':lead.attio_sync_error?'Attio sync needs attention':'Waiting to sync to Attio'}</strong>{lead.attio_sync_error&&<small>{lead.attio_sync_error}</small>}{!lead.attio_record_id&&<button type="button" disabled={saving} onClick={()=>syncToAttio(lead)}>Retry Attio sync</button>}</div>}
+      {lead.status==='approved'&&<div className="crm-state"><strong>{lead.attio_record_id?'Synced to Attio':lead.attio_sync_error?'Attio sync needs attention':'Waiting to sync to Attio'}</strong>{lead.attio_sync_error&&<small>{lead.attio_sync_error}</small>}{lead.attio_web_url&&<a href={lead.attio_web_url} target="_blank" rel="noreferrer">Open Attio Deal <ExternalLink size={14}/></a>}{lead.attio_project_url&&<a href={lead.attio_project_url} target="_blank" rel="noreferrer">Open Attio Project <ExternalLink size={14}/></a>}{!lead.attio_record_id&&<button type="button" disabled={saving} onClick={()=>syncToAttio(lead)}>Retry Attio sync</button>}</div>}
       {!readonly&&<footer>
         <button className="skip" disabled={saving} onClick={()=>save({status:'skipped',skipped_at:new Date().toISOString(),email_subject:subject,email_body:body})}><SkipForward size={15}/> Skip</button>
         <button disabled={saving} onClick={()=>save({status:'reviewing',email_subject:subject,email_body:body})}>Save draft</button>

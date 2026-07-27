@@ -7,6 +7,7 @@ import AuthGate from './AuthGate';
 import { CommunicationTimeline, OutreachPage } from './Outreach';
 import { apiFetch } from './api';
 import { supabase } from './supabase';
+import { projectIdFromSearch, projectSearchUrl } from './projectLinks';
 
 const ProjectMap = lazy(() => import('./ProjectMap'));
 const API = '/api';
@@ -69,6 +70,7 @@ function App({session,cloudEnabled}){
   const [mobileMoreOpen,setMobileMoreOpen]=useState(false);
   const [saved,setSaved]=useState(()=>new Set(JSON.parse(localStorage.getItem('gsd-saved')||'[]'))), [notes,setNotes]=useState(()=>JSON.parse(localStorage.getItem('gsd-notes')||'{}'));
   const [history,setHistory]=useState({}), [syncStatus,setSyncStatus]=useState(null), [tracking,setTracking]=useState({});
+  const [attioLinks,setAttioLinks]=useState({}), [enrichment,setEnrichment]=useState({});
   const [tasks,setTasks]=useState([]);
   const [outreachLeads,setOutreachLeads]=useState([]), [communications,setCommunications]=useState([]), [suppressions,setSuppressions]=useState([]);
   const [draftFilters,setDraftFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',liveOnly:true}), [filters,setFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',liveOnly:true});
@@ -85,8 +87,10 @@ function App({session,cloudEnabled}){
     supabase.from('project_tasks').select('*').order('completed',{ascending:true}).order('due_date',{ascending:true,nullsFirst:false}).order('created_at',{ascending:false}),
     fetchAllRows('outreach_leads','*'),
     fetchAllRows('outreach_communications','*'),
-    fetchAllRows('outreach_suppressions','*')
-  ]).then(([s,n,h,sync,t,taskRows,outreachRows,communicationRows,suppressionRows])=>{if(s.data)setSaved(new Set(s.data.map(x=>x.project_id)));if(n.data)setNotes(Object.fromEntries(n.data.map(x=>[x.project_id,x.note])));if(h.data)setHistory(Object.fromEntries(h.data.map(x=>[x.project_id,x])));if(sync.data)setSyncStatus(sync.data);if(t.data)setTracking(Object.fromEntries(t.data.map(x=>[x.project_id,x])));if(taskRows.data)setTasks(taskRows.data);if(outreachRows.data)setOutreachLeads(outreachRows.data);if(communicationRows.data)setCommunications(communicationRows.data);if(suppressionRows.data)setSuppressions(suppressionRows.data)}) },[cloudEnabled]);
+    fetchAllRows('outreach_suppressions','*'),
+    fetchAllRows('attio_sync_links','project_id,entity_type,attio_record_id,attio_web_url,sync_status,sync_error,synced_at'),
+    fetchAllRows('ccs_project_enrichment','*')
+  ]).then(([s,n,h,sync,t,taskRows,outreachRows,communicationRows,suppressionRows,attioRows,enrichmentRows])=>{if(s.data)setSaved(new Set(s.data.map(x=>x.project_id)));if(n.data)setNotes(Object.fromEntries(n.data.map(x=>[x.project_id,x.note])));if(h.data)setHistory(Object.fromEntries(h.data.map(x=>[x.project_id,x])));if(sync.data)setSyncStatus(sync.data);if(t.data)setTracking(Object.fromEntries(t.data.map(x=>[x.project_id,x])));if(taskRows.data)setTasks(taskRows.data);if(outreachRows.data)setOutreachLeads(outreachRows.data);if(communicationRows.data)setCommunications(communicationRows.data);if(suppressionRows.data)setSuppressions(suppressionRows.data);if(attioRows.data)setAttioLinks(Object.fromEntries(attioRows.data.filter(x=>x.entity_type==='project'&&x.project_id).map(x=>[x.project_id,x])));if(enrichmentRows.data)setEnrichment(Object.fromEntries(enrichmentRows.data.map(x=>[x.project_id,x])))}) },[cloudEnabled]);
   useEffect(()=>setPage(1),[query,filters,activeView]);
 
   const options=useMemo(()=>({locations:unique(projects,'LaId'),contractors:unique(projects,'MainContractor'),clients:unique(projects,'Client')}),[projects]);
@@ -107,7 +111,15 @@ function App({session,cloudEnabled}){
   const contractorStats=useMemo(()=>Object.values(projects.reduce((acc,p)=>{const name=value(p.MainContractor,'Unknown contractor');if(!acc[name])acc[name]={name,count:0,locations:new Set(),saved:0};acc[name].count++;if(p.LaId)acc[name].locations.add(p.LaId);if(saved.has(p.Id))acc[name].saved++;return acc},{})).sort((a,b)=>b.count-a.count),[projects,saved]);
   const syncIsStale=syncStatus&&Date.now()-new Date(syncStatus.completed_at).getTime()>36*60*60*1000;
 
-  const open=useCallback(async p=>{setSelected(p);setDetail(null);try{const r=await apiFetch(`${API}/projects/${p.Id}`);if(!r.ok)throw new Error('Detail unavailable');setDetail(await r.json())}catch{setDetail({...p,Address:p.LaId,SourceUrl:`https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails/${p.Id.replace('site','')}/null`})}},[]);
+  const open=useCallback(async (p,{updateUrl=true}={})=>{setSelected(p);setDetail(null);if(updateUrl)window.history.replaceState({},'',projectSearchUrl(window.location,p.Id));try{const r=await apiFetch(`${API}/projects/${p.Id}`);if(!r.ok)throw new Error('Detail unavailable');setDetail(await r.json())}catch{setDetail({...p,Address:p.LaId,SourceUrl:`https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails/${p.Id.replace('site','')}/null`})}},[]);
+  const closeProject=useCallback(()=>{setSelected(null);setDetail(null);window.history.replaceState({},'',projectSearchUrl(window.location,null))},[]);
+  useEffect(()=>{
+    const linkedId=projectIdFromSearch(window.location.search);
+    if(!linkedId||!projects.length||selected?.Id===linkedId)return;
+    const linkedProject=projects.find(project=>project.Id===linkedId);
+    if(linkedProject){setActiveView('projects');open(linkedProject,{updateUrl:false})}
+    else setError(`Project ${linkedId.replace('site','')} is not in the current SiteFinder feed.`);
+  },[projects,selected?.Id,open]);
   const toggleSave=async p=>{const wasSaved=saved.has(p.Id),next=new Set(saved);wasSaved?next.delete(p.Id):next.add(p.Id);setSaved(next);localStorage.setItem('gsd-saved',JSON.stringify([...next]));if(cloudEnabled){const result=wasSaved?await supabase.from('saved_projects').delete().eq('project_id',p.Id):await supabase.from('saved_projects').upsert({project_id:p.Id,project_name:p.Name,saved_by:session.user.id});if(result.error){setSaved(saved);setError(`Could not update saved projects: ${result.error.message}`)}}};
   const addNote=async p=>{const note=window.prompt('Shared project note',notes[p.Id]||'');if(note===null)return;const next={...notes};note.trim()?next[p.Id]=note.trim():delete next[p.Id];setNotes(next);localStorage.setItem('gsd-notes',JSON.stringify(next));if(cloudEnabled){const result=note.trim()?await supabase.from('project_notes').upsert({project_id:p.Id,project_name:p.Name,note:note.trim(),updated_by:session.user.id,updated_at:new Date().toISOString()}):await supabase.from('project_notes').delete().eq('project_id',p.Id);if(result.error)setError(`Could not update note: ${result.error.message}`)}};
   const updateTracking=async(p,changes)=>{const next={...(tracking[p.Id]||{}),project_id:p.Id,...changes,updated_at:new Date().toISOString()};setTracking(x=>({...x,[p.Id]:next}));if(cloudEnabled){const {error:trackingError}=await supabase.from('lead_tracking').upsert({...next,updated_by:session.user.id});if(trackingError){setError(`Could not update lead: ${trackingError.message}`);return false}}return true};
@@ -136,7 +148,7 @@ function App({session,cloudEnabled}){
     if(!cloudEnabled)return false;
     const {data,error:syncError}=await supabase.functions.invoke('sync-approved-leads-to-attio',{body:{lead_id:lead.id}});
     if(syncError||data?.error){const message=data?.error||syncError?.message||'Attio sync failed';setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,attio_sync_error:message}:item));setError(`Lead approved, but Attio could not be updated: ${message}`);return false}
-    setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,attio_record_id:data.attio_record_id,attio_synced_at:data.attio_synced_at,attio_sync_error:null}:item));
+    setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,attio_record_id:data.attio_record_id,attio_web_url:data.web_url,attio_project_url:data.project_web_url,attio_synced_at:data.attio_synced_at,attio_sync_error:null}:item));
     return true
   };
   const logCommunication=async(p,channel)=>{
@@ -151,7 +163,7 @@ function App({session,cloudEnabled}){
   const updateDraftFilter=(key,nextValue)=>setDraftFilters(current=>{const next={...current,[key]:nextValue};draftFiltersRef.current=next;return next});
   const applyFilters=()=>setFilters({...draftFiltersRef.current});
   const clearFilters=()=>{const empty={location:'',contractor:'',client:'',recency:'',completionWindow:'',liveOnly:true};draftFiltersRef.current=empty;setDraftFilters(empty);setFilters(empty);setQuery('')};
-  const goToView=id=>{setActiveView(id);setSelected(null);setMobileMoreOpen(false)};
+  const goToView=id=>{setActiveView(id);closeProject();setMobileMoreOpen(false)};
 
   return <div className="app">
     <header><div className="brand"><Building2/><b>GSD</b> SiteFinder</div><nav aria-label="Primary navigation">{navItems.map(({id,label,icon:Icon})=><button key={id} className={`${activeView===id?'active':''} ${['outreach','insights','contractors'].includes(id)?'secondary-nav':''}`} onClick={()=>goToView(id)}><Icon size={16}/>{label}{id==='saved'&&saved.size>0&&<span>{saved.size}</span>}</button>)}<button className={`more-nav ${mobileMoreOpen?'active':''}`} onClick={()=>setMobileMoreOpen(value=>!value)}><MoreHorizontal size={18}/>More</button></nav><button className="user" onClick={()=>cloudEnabled&&supabase.auth.signOut()} title={cloudEnabled?'Sign out':'Local preview'}>{session?.user?.email?.slice(0,2).toUpperCase()||'GC'}</button>{mobileMoreOpen&&<div className="mobile-more-menu">{navItems.filter(item=>['outreach','insights','contractors'].includes(item.id)).map(({id,label,icon:Icon})=><button key={id} onClick={()=>goToView(id)}><Icon size={17}/>{label}</button>)}</div>}</header>
@@ -180,7 +192,7 @@ function App({session,cloudEnabled}){
       {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} updateLead={updateOutreach} syncToAttio={syncOutreachToAttio}/>}
       {activeView==='contractors'&&<Contractors stats={contractorStats} onSelect={name=>{updateDraftFilter('contractor',name);setFilters(x=>({...x,contractor:name}));goToView('projects')}}/>}
     </main>
-    {selected&&<ProjectDrawer className={activeView==='map'?'map-drawer':''} selected={selected} detail={detail} close={()=>setSelected(null)} saved={saved.has(selected.Id)} toggleSave={()=>toggleSave(selected)} note={notes[selected.Id]} addNote={()=>addNote(selected)} meta={history[selected.Id]} tracking={tracking[selected.Id]} updateTracking={changes=>updateTracking(selected,changes)} tasks={tasks.filter(task=>task.project_id===selected.Id)} createTask={input=>createTask(selected,input)} toggleTask={toggleTask} deleteTask={deleteTask} outreachLead={outreachLeads.find(lead=>lead.project_id===selected.Id)} queueOutreach={()=>queueOutreach(selected,detail||{})} communications={communications.filter(item=>item.project_id===selected.Id)} logCommunication={channel=>logCommunication(selected,channel)}/>}
+    {selected&&<ProjectDrawer className={activeView==='map'?'map-drawer':''} selected={selected} detail={detail} close={closeProject} saved={saved.has(selected.Id)} toggleSave={()=>toggleSave(selected)} note={notes[selected.Id]} addNote={()=>addNote(selected)} meta={history[selected.Id]} attioLink={attioLinks[selected.Id]} enrichment={enrichment[selected.Id]} tracking={tracking[selected.Id]} updateTracking={changes=>updateTracking(selected,changes)} tasks={tasks.filter(task=>task.project_id===selected.Id)} createTask={input=>createTask(selected,input)} toggleTask={toggleTask} deleteTask={deleteTask} outreachLead={outreachLeads.find(lead=>lead.project_id===selected.Id)} queueOutreach={()=>queueOutreach(selected,detail||{})} communications={communications.filter(item=>item.project_id===selected.Id)} logCommunication={channel=>logCommunication(selected,channel)}/>}
   </div>
 }
 
@@ -267,6 +279,36 @@ function projectDescription(detail,selected){
   return `${selected.Name} is an active CCS-registered construction project at ${address}, being delivered by ${contractor} for ${client}.${period} CCS has not published a more detailed scope of works for this registration.`;
 }
 
-function ProjectDrawer({className='',selected,detail,close,saved,toggleSave,note,addNote,meta,tracking={},updateTracking,tasks,createTask,toggleTask,deleteTask,outreachLead,queueOutreach,communications,logCommunication}){return <div className={`drawer ${className}`} role="dialog" aria-label={`${selected.Name} project details`}><div className="drawer-head"><div><h2>{selected.Name}</h2><p>CCS {selected.Id.replace('site','')}{meta&&` · First seen ${fmtDate(meta.first_seen_at)}`}</p></div><button className="icon" onClick={close} aria-label="Close project details"><X/></button></div><div className="drawer-actions"><button onClick={toggleSave}><Star size={16} fill={saved?'currentColor':'none'}/>{saved?'Saved':'Save lead'}</button><button onClick={addNote}><StickyNote size={16}/>{note?'Edit note':'Add note'}</button><button onClick={queueOutreach}><Megaphone size={16}/>{outreachLead?'Open outreach':'Add to outreach'}</button></div><section className="lead-workflow"><h3>Lead workflow</h3><label>Stage<select value={tracking.stage||'new'} onChange={e=>updateTracking({stage:e.target.value})}>{STAGES.map(stage=><option key={stage} value={stage}>{stage[0].toUpperCase()+stage.slice(1)}</option>)}</select></label><label>Next action<input key={tracking.next_action||''} defaultValue={tracking.next_action||''} placeholder="e.g. Call the site manager" onBlur={e=>updateTracking({next_action:e.target.value})}/></label><label>Follow-up date<input type="date" value={tracking.next_action_at?.slice(0,10)||''} onChange={e=>updateTracking({next_action_at:e.target.value?new Date(`${e.target.value}T09:00:00`).toISOString():null})}/></label></section><ProjectTaskList tasks={tasks} createTask={createTask} toggleTask={toggleTask} deleteTask={deleteTask}/><section><div className="section-title"><h3>Communication history</h3></div><CommunicationTimeline communications={communications}/><div className="communication-actions"><button onClick={()=>logCommunication('phone')}><Phone size={15}/> Log call</button><button onClick={()=>logCommunication('note')}><StickyNote size={15}/> Add note</button></div></section>{!detail?<div className="drawer-loading">Loading verified project record…</div>:<><section><h3>Project description</h3><p>{projectDescription(detail,selected)}</p></section><section><h3>Contact</h3><h4>{[detail.SiteManagerFirstName,detail.SiteManagerLastName].filter(Boolean).join(' ')||'Not published'}</h4><p>{detail.SiteManagerJobTitle||'Site contact'}</p>{detail.SiteManagerPhone&&<a href={`tel:${detail.SiteManagerPhone}`}><Phone size={15}/>{detail.SiteManagerPhone}</a>}{detail.MarkerEmail&&<a href={`mailto:${detail.MarkerEmail}`}><Mail size={15}/>{detail.MarkerEmail}</a>}</section><section className="facts"><h3>Project details</h3><dl><dt>Main Contractor</dt><dd>{value(detail.MainContractor||selected.MainContractor)}</dd><dt>Client</dt><dd>{value(detail.Client||selected.Client)}</dd><dt>Project Period</dt><dd><CalendarDays size={14}/>{fmtDate(detail.SiteStartDate)} – {fmtDate(detail.SiteEndDate)}</dd><dt>Address</dt><dd>{value(detail.Address||selected.LaId)}</dd><dt>Local Authority</dt><dd>{value(detail.LocalAuthority||selected.LaId)}</dd></dl></section><section><a className="source" href={detail.SourceUrl} target="_blank" rel="noreferrer">Open verified CCS source record <ExternalLink size={15}/></a></section></>}</div>}
+function ProjectDrawer({className='',selected,detail,close,saved,toggleSave,note,addNote,meta,attioLink,enrichment={},tracking={},updateTracking,tasks,createTask,toggleTask,deleteTask,outreachLead,queueOutreach,communications,logCommunication}){
+  const label=value=>String(value||'unknown').split('_').map(word=>word[0].toUpperCase()+word.slice(1)).join(' ');
+  const mapUrl=enrichment.map_url||(selected.Latitude&&selected.Longitude?`https://www.google.com/maps/search/?api=1&query=${selected.Latitude},${selected.Longitude}`:null);
+  return <div className={`drawer ${className}`} role="dialog" aria-label={`${selected.Name} project details`}>
+    <div className="drawer-head"><div><h2>{selected.Name}</h2><p>CCS {selected.Id.replace('site','')}{meta&&` · First seen ${fmtDate(meta.first_seen_at)}`}</p></div><button className="icon" onClick={close} aria-label="Close project details"><X/></button></div>
+    <div className="drawer-actions">
+      <button onClick={toggleSave}><Star size={16} fill={saved?'currentColor':'none'}/>{saved?'Saved':'Save lead'}</button>
+      <button onClick={addNote}><StickyNote size={16}/>{note?'Edit note':'Add note'}</button>
+      <button onClick={queueOutreach}><Megaphone size={16}/>{outreachLead?'Open outreach':'Add to outreach'}</button>
+      {attioLink?.attio_web_url&&<a className="attio-action" href={attioLink.attio_web_url} target="_blank" rel="noreferrer"><ExternalLink size={16}/>Open in Attio</a>}
+    </div>
+    <section className="lead-workflow"><h3>Lead workflow</h3><label>Stage<select value={tracking.stage||'new'} onChange={e=>updateTracking({stage:e.target.value})}>{STAGES.map(stage=><option key={stage} value={stage}>{stage[0].toUpperCase()+stage.slice(1)}</option>)}</select></label><label>Next action<input key={tracking.next_action||''} defaultValue={tracking.next_action||''} placeholder="e.g. Call the site manager" onBlur={e=>updateTracking({next_action:e.target.value})}/></label><label>Follow-up date<input type="date" value={tracking.next_action_at?.slice(0,10)||''} onChange={e=>updateTracking({next_action_at:e.target.value?new Date(`${e.target.value}T09:00:00`).toISOString():null})}/></label></section>
+    <ProjectTaskList tasks={tasks} createTask={createTask} toggleTask={toggleTask} deleteTask={deleteTask}/>
+    <section><div className="section-title"><h3>Communication history</h3></div><CommunicationTimeline communications={communications}/><div className="communication-actions"><button onClick={()=>logCommunication('phone')}><Phone size={15}/> Log call</button><button onClick={()=>logCommunication('note')}><StickyNote size={15}/> Add note</button></div></section>
+    {!detail?<div className="drawer-loading">Loading verified project record…</div>:<>
+      <section><h3>Project description</h3><p>{projectDescription(detail,selected)}</p></section>
+      <section><h3>Contact</h3><h4>{[detail.SiteManagerFirstName,detail.SiteManagerLastName].filter(Boolean).join(' ')||'Not published'}</h4><p>{detail.SiteManagerJobTitle||'Site contact'}</p>{detail.SiteManagerPhone&&<a href={`tel:${detail.SiteManagerPhone}`}><Phone size={15}/>{detail.SiteManagerPhone}</a>}{detail.MarkerEmail&&<a href={`mailto:${detail.MarkerEmail}`}><Mail size={15}/>{detail.MarkerEmail}</a>}</section>
+      <section className="facts"><h3>Project intelligence</h3><dl>
+        <dt>GSD Timing</dt><dd>{label(enrichment.gsd_timing)}</dd>
+        <dt>Programme</dt><dd>{label(enrichment.programme_stage)}</dd>
+        <dt>Fit Out</dt><dd>{label(enrichment.fit_out_state)}</dd>
+        <dt>New Build Housing</dt><dd>{label(enrichment.new_build_housing_state)}</dd>
+        <dt>Sector</dt><dd>{enrichment.sector||'Unknown'}</dd>
+        <dt>Work Type</dt><dd>{enrichment.work_type||'Unknown'}</dd>
+        <dt>CCS Rating</dt><dd>{enrichment.ccs_rating||'Not published'}</dd>
+      </dl>{enrichment.classification_evidence?.length>0&&<p className="classification-evidence">{enrichment.classification_evidence.join(' · ')}</p>}</section>
+      <section className="facts"><h3>Project details</h3><dl><dt>Main Contractor</dt><dd>{value(detail.MainContractor||selected.MainContractor)}</dd><dt>Client</dt><dd>{value(detail.Client||selected.Client)}</dd><dt>Project Period</dt><dd><CalendarDays size={14}/>{fmtDate(detail.SiteStartDate)} – {fmtDate(detail.SiteEndDate)}</dd><dt>Address</dt><dd>{value(detail.Address||selected.LaId)}</dd><dt>Local Authority</dt><dd>{value(detail.LocalAuthority||selected.LaId)}</dd></dl></section>
+      <section className="record-links"><h3>Connected records</h3>{attioLink?.attio_web_url?<a className="source" href={attioLink.attio_web_url} target="_blank" rel="noreferrer">Open linked Attio Project <ExternalLink size={15}/></a>:<p>Attio project link pending.</p>}{mapUrl&&<a className="source" href={mapUrl} target="_blank" rel="noreferrer">Open project map <MapPin size={15}/></a>}<a className="source" href={detail.SourceUrl} target="_blank" rel="noreferrer">Open verified CCS source record <ExternalLink size={15}/></a></section>
+    </>}
+  </div>
+}
 
 createRoot(document.getElementById('root')).render(<AuthGate>{props=>location.pathname==='/oauth/consent'?<OAuthConsent {...props}/>:<App {...props}/>}</AuthGate>);
