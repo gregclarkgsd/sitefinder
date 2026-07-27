@@ -60,7 +60,7 @@ export function OutreachPage({ leads, communications, suppressions, updateLead }
       </div>
       <div className="sender-state">
         <span><Mail size={16}/> Sender</span>
-        <strong>Sam’s Google Workspace mailbox</strong>
+        <strong>samward@gsdecorating.com</strong>
         <small>Connection required before sending</small>
       </div>
     </div>
@@ -119,7 +119,7 @@ function OutreachComposer({lead,suppressed,communications,close,save,saving}) {
     <section className="outreach-composer" role="dialog" aria-modal="true" aria-label={`Review outreach for ${lead.project_name}`}>
       <header><div><h2>{lead.project_name}</h2><p>Review the recipient and wording before approval.</p></div><button onClick={close} aria-label="Close outreach review"><X/></button></header>
       <div className="composer-addresses">
-        <label>From<input value="Sam’s Google Workspace mailbox — not connected" readOnly/></label>
+        <label>From<input value="samward@gsdecorating.com — not connected" readOnly/></label>
         <label>To<input value={lead.recipient_email||'No email published by CCS'} readOnly/></label>
       </div>
       <label>Subject<input value={subject} onChange={event=>setSubject(event.target.value)} readOnly={readonly}/></label>
