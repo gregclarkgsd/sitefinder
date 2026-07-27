@@ -65,8 +65,8 @@ async function concurrentMap<T, R>(items: T[], limit: number, worker: (item: T) 
   return results;
 }
 
-async function fetchExistingProjects(db: ReturnType<typeof createClient>) {
-  const rows = [];
+async function fetchExistingProjects(db: any) {
+  const rows: any[] = [];
   const pageSize = 1000;
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await db
@@ -80,7 +80,8 @@ async function fetchExistingProjects(db: ReturnType<typeof createClient>) {
 }
 
 Deno.serve(async request => {
-  if (request.headers.get('x-sync-token') !== Deno.env.get('CCS_SYNC_TOKEN')) {
+  const syncToken = Deno.env.get('CCS_SYNC_TOKEN');
+  if (!syncToken || request.headers.get('x-sync-token') !== syncToken) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -128,6 +129,7 @@ Deno.serve(async request => {
 
     let newProjects = 0;
     let changedProjects = 0;
+    const projectsForAttio: string[] = [];
     const rows = [];
 
     for (const { project, detail, detailError } of enriched) {
@@ -141,6 +143,7 @@ Deno.serve(async request => {
       const changed = markerChanged || detailChanged;
       if (isNew && !baseline) newProjects++;
       if (changed) changedProjects++;
+      if (!baseline && (isNew || changed)) projectsForAttio.push(projectId);
 
       const managerName = detail
         ? [detail.SiteManagerFirstName, detail.SiteManagerLastName].filter(Boolean).join(' ') || null
@@ -222,6 +225,37 @@ Deno.serve(async request => {
       detail_errors: detailErrors,
     }).eq('id', run.id);
 
+    let attioSyncedProjects = 0;
+    const attioSyncErrors: string[] = [];
+    for (let index = 0; index < projectsForAttio.length; index += 10) {
+      try {
+        const response = await fetch(
+          `${Deno.env.get('SUPABASE_URL')}/functions/v1/sync-ccs-projects-to-attio`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-sync-token': syncToken,
+            },
+            body: JSON.stringify({
+              action: 'sync',
+              project_ids: projectsForAttio.slice(index, index + 10),
+            }),
+            signal: AbortSignal.timeout(120_000),
+          },
+        );
+        const result = await response.json().catch(() => ({}));
+        attioSyncedProjects += Number(result.synced || 0);
+        if (!response.ok || result.failed) {
+          attioSyncErrors.push(
+            String(result.error || `${result.failed || 0} Attio project sync failures`).slice(0, 500),
+          );
+        }
+      } catch (error) {
+        attioSyncErrors.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+
     return Response.json({
       ok: true,
       baseline,
@@ -230,6 +264,9 @@ Deno.serve(async request => {
       changedProjects,
       detailProjects,
       detailErrors,
+      attioRequestedProjects: projectsForAttio.length,
+      attioSyncedProjects,
+      attioSyncErrors,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
