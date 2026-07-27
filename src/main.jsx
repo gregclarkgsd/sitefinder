@@ -19,6 +19,15 @@ const fallback = [
 const fmtDate = d => d ? new Intl.DateTimeFormat('en-GB').format(new Date(d)) : 'Not published';
 const value = (v, fallbackText='Not published') => String(v || '').trim() || fallbackText;
 const unique = (items, key) => [...new Set(items.map(item => item[key]).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+const fetchAllRows = async (table, columns, pageSize=1000) => {
+  const rows = [];
+  for (let from = 0; ; from += pageSize) {
+    const {data,error} = await supabase.from(table).select(columns).range(from,from+pageSize-1);
+    if (error) return {data:null,error};
+    rows.push(...(data||[]));
+    if (!data || data.length < pageSize) return {data:rows,error:null};
+  }
+};
 const navItems = [
   {id:'projects',label:'Projects',icon:FolderKanban},
   {id:'saved',label:'Saved',icon:Bookmark},
@@ -44,7 +53,7 @@ function App({session,cloudEnabled}){
   useEffect(()=>{ if(!cloudEnabled) return; Promise.all([
     supabase.from('saved_projects').select('project_id'),
     supabase.from('project_notes').select('project_id,note'),
-    supabase.from('ccs_projects').select('project_id,first_seen_at,last_seen_at,last_changed_at,discovered_after_baseline,is_active'),
+    fetchAllRows('ccs_projects','project_id,first_seen_at,last_seen_at,last_changed_at,discovered_after_baseline,is_active'),
     supabase.from('ccs_sync_runs').select('completed_at,total_projects,new_projects,changed_projects,detail_projects,detail_errors,status').eq('status','completed').order('completed_at',{ascending:false}).limit(1).maybeSingle(),
     supabase.from('lead_tracking').select('project_id,stage,assigned_email,next_action,next_action_at,updated_at'),
     supabase.from('project_tasks').select('*').order('completed',{ascending:true}).order('due_date',{ascending:true,nullsFirst:false}).order('created_at',{ascending:false})
