@@ -368,7 +368,8 @@ async function ensureProjectAttributes(
       continue;
     }
     try {
-      attributes.push(await attio.createAttribute(object, definition));
+      const { aliases: _aliases, ...apiDefinition } = definition;
+      attributes.push(await attio.createAttribute(object, apiDefinition));
     } catch (error) {
       warnings.push(`Could not create ${definition.title}: ${errorMessage(error)}`);
     }
@@ -389,8 +390,9 @@ async function ensureReferenceAttribute(
   );
   if (existing?.type === 'record-reference') return { attribute: existing, warning: null };
   try {
+    const { aliases: _aliases, ...apiDefinition } = definition;
     const attribute = await attio.createAttribute(object, {
-      ...definition,
+      ...apiDefinition,
       type: 'record-reference',
       config: { record_reference: { allowed_objects: [allowedObject] } },
     });
