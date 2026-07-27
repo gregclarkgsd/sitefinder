@@ -1,6 +1,6 @@
 # GSD SiteFinder
 
-Private construction-lead identification tool for GSD Decorating. It reads the public Considerate Constructors Scheme marker feed and retrieves an individual public CCS record when a user opens a project.
+Private construction-lead identification tool for GSD Decorating. It reads the public Considerate Constructors Scheme marker feed, exposes the full London and selected Home Counties result set, and retrieves an individual public CCS record when a user opens a project.
 
 ## Local development
 
@@ -23,6 +23,17 @@ Never expose a Supabase secret/service-role key to the frontend.
 ## Production
 
 The included `render.yaml` builds and serves the React application and Express API as one Render web service. Apply the SQL migration in `supabase/migrations` to a dedicated Supabase project before deploying.
+
+The production Supabase project runs `sync-ccs-projects` nightly through Supabase Cron. The sync:
+
+- records new and archived marker records;
+- refreshes every eligible CCS detail record with bounded concurrency;
+- fingerprints contact, address, date, closure and description fields for change detection;
+- records per-run marker totals, detail totals and detail errors;
+- preserves the last successful sync time for the application freshness warning.
+
+Set the Edge Function secret `CCS_SYNC_TOKEN` to the same value stored in the
+Supabase Vault secret `ccs_sync_token`; do not commit that value.
 
 ## Data source
 
