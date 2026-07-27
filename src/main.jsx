@@ -5,6 +5,7 @@ import './styles.css';
 import './mobile.css';
 import AuthGate from './AuthGate';
 import { CommunicationTimeline, OutreachPage } from './Outreach';
+import { apiFetch } from './api';
 import { supabase } from './supabase';
 
 const API = '/api';
@@ -51,7 +52,7 @@ function App({session,cloudEnabled}){
   const [outreachLeads,setOutreachLeads]=useState([]), [communications,setCommunications]=useState([]), [suppressions,setSuppressions]=useState([]);
   const [draftFilters,setDraftFilters]=useState({location:'',contractor:'',client:'',recency:'',liveOnly:true}), [filters,setFilters]=useState({location:'',contractor:'',client:'',recency:'',liveOnly:true});
 
-  const load=()=>{setLoading(true);setError('');fetch(`${API}/projects`).then(async r=>{if(!r.ok) throw new Error((await r.json()).error||'Unable to load CCS projects');return r.json()}).then(d=>setProjects(d.projects||fallback)).catch(err=>{setProjects(fallback);setError(`${err.message}. Showing cached examples.`)}).finally(()=>setLoading(false))};
+  const load=()=>{setLoading(true);setError('');apiFetch(`${API}/projects`).then(async r=>{if(!r.ok) throw new Error((await r.json()).error||'Unable to load CCS projects');return r.json()}).then(d=>setProjects(d.projects||fallback)).catch(err=>{setProjects(fallback);setError(`${err.message}. Showing cached examples.`)}).finally(()=>setLoading(false))};
   useEffect(load,[]);
   useEffect(()=>{ if(!cloudEnabled) return; Promise.all([
     supabase.from('saved_projects').select('project_id'),
@@ -83,7 +84,7 @@ function App({session,cloudEnabled}){
   const contractorStats=useMemo(()=>Object.values(projects.reduce((acc,p)=>{const name=value(p.MainContractor,'Unknown contractor');if(!acc[name])acc[name]={name,count:0,locations:new Set(),saved:0};acc[name].count++;if(p.LaId)acc[name].locations.add(p.LaId);if(saved.has(p.Id))acc[name].saved++;return acc},{})).sort((a,b)=>b.count-a.count),[projects,saved]);
   const syncIsStale=syncStatus&&Date.now()-new Date(syncStatus.completed_at).getTime()>36*60*60*1000;
 
-  const open=async p=>{setSelected(p);setDetail(null);try{const r=await fetch(`${API}/projects/${p.Id}`);if(!r.ok)throw new Error('Detail unavailable');setDetail(await r.json())}catch{setDetail({...p,Address:p.LaId,SourceUrl:`https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails/${p.Id.replace('site','')}/null`})}};
+  const open=async p=>{setSelected(p);setDetail(null);try{const r=await apiFetch(`${API}/projects/${p.Id}`);if(!r.ok)throw new Error('Detail unavailable');setDetail(await r.json())}catch{setDetail({...p,Address:p.LaId,SourceUrl:`https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails/${p.Id.replace('site','')}/null`})}};
   const toggleSave=async p=>{const wasSaved=saved.has(p.Id),next=new Set(saved);wasSaved?next.delete(p.Id):next.add(p.Id);setSaved(next);localStorage.setItem('gsd-saved',JSON.stringify([...next]));if(cloudEnabled){const result=wasSaved?await supabase.from('saved_projects').delete().eq('project_id',p.Id):await supabase.from('saved_projects').upsert({project_id:p.Id,project_name:p.Name,saved_by:session.user.id});if(result.error){setSaved(saved);setError(`Could not update saved projects: ${result.error.message}`)}}};
   const addNote=async p=>{const note=window.prompt('Shared project note',notes[p.Id]||'');if(note===null)return;const next={...notes};note.trim()?next[p.Id]=note.trim():delete next[p.Id];setNotes(next);localStorage.setItem('gsd-notes',JSON.stringify(next));if(cloudEnabled){const result=note.trim()?await supabase.from('project_notes').upsert({project_id:p.Id,project_name:p.Name,note:note.trim(),updated_by:session.user.id,updated_at:new Date().toISOString()}):await supabase.from('project_notes').delete().eq('project_id',p.Id);if(result.error)setError(`Could not update note: ${result.error.message}`)}};
   const updateTracking=async(p,changes)=>{const next={...(tracking[p.Id]||{}),project_id:p.Id,...changes,updated_at:new Date().toISOString()};setTracking(x=>({...x,[p.Id]:next}));if(cloudEnabled){const {error:trackingError}=await supabase.from('lead_tracking').upsert({...next,updated_by:session.user.id});if(trackingError){setError(`Could not update lead: ${trackingError.message}`);return false}}return true};

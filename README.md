@@ -20,6 +20,11 @@ VITE_SUPABASE_PUBLISHABLE_KEY
 
 Never expose a Supabase secret/service-role key to the frontend.
 
+All `/api/*` routes require either a valid Supabase session belonging to an
+`@gsdecorating.com` user or the server-only MCP bearer token. The browser
+automatically attaches the current Supabase access token. Unauthenticated
+production requests return `401`.
+
 ## Production
 
 The included `render.yaml` builds and serves the React application and Express API as one Render web service. Apply the SQL migration in `supabase/migrations` to a dedicated Supabase project before deploying.
@@ -44,8 +49,14 @@ Use is intended for authorised GSD Decorating employees and remains subject to C
 
 ## MCP access for Codex and Claude Code
 
-The repository includes a read-only MCP server at `mcp/stdio.js`. It gives coding
-agents five direct SiteFinder tools:
+The production service exposes a read-only Streamable HTTP MCP endpoint at:
+
+```text
+https://gsd-sitefinder.onrender.com/mcp
+```
+
+The repository also includes a local stdio transport at `mcp/stdio.js`. Both
+transports provide five direct SiteFinder tools:
 
 - `search_projects`
 - `get_project`
@@ -53,28 +64,48 @@ agents five direct SiteFinder tools:
 - `list_locations`
 - `sitefinder_status`
 
-The MCP process reads from the production SiteFinder API by default and never
-receives a Supabase secret key. To point it at another deployment, set
-`SITEFINDER_URL`.
+The MCP server reads through the authenticated SiteFinder API and never receives
+a Supabase secret key. The hosted server stores only the SHA-256 hash of its
+long random bearer credential. Do not use the bearer token in frontend code or
+commit it to Git.
 
 Run its end-to-end smoke test:
 
 ```bash
 npm run mcp:test
+SITEFINDER_MCP_TOKEN=... npm run mcp:http:test
 ```
 
-Register it with Codex:
+Register the hosted endpoint with Claude Code:
+
+```bash
+claude mcp add --transport http --scope user gsd-sitefinder \
+  https://gsd-sitefinder.onrender.com/mcp \
+  --header "Authorization: Bearer YOUR_SITEFINDER_MCP_TOKEN"
+```
+
+Then verify it with:
+
+```bash
+claude mcp get gsd-sitefinder
+```
+
+Alternatively, register the local stdio process with Codex:
 
 ```bash
 codex mcp add gsd-sitefinder -- node "/absolute/path/to/gsd-sitefinder/mcp/stdio.js"
 ```
 
-Register it with Claude Code for the current user:
+Or register the local stdio process with Claude Code:
 
 ```bash
-claude mcp add --scope user gsd-sitefinder -- node "/absolute/path/to/gsd-sitefinder/mcp/stdio.js"
+claude mcp add --scope user \
+  --env SITEFINDER_MCP_TOKEN=YOUR_SITEFINDER_MCP_TOKEN \
+  gsd-sitefinder -- node "/absolute/path/to/gsd-sitefinder/mcp/stdio.js"
 ```
 
 This first version is intentionally read-only. Saved leads, notes, lead stages
 and tasks remain protected by Supabase authentication and cannot be modified
-through MCP.
+through MCP. Search results include the CCS site ID plus stable
+`MainContractorId` and `ClientId` join keys. `get_project` returns the public CCS
+detail record with address, dates and published contact fields.

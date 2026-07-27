@@ -15,3 +15,5 @@ services:
         sync: false
       - key: VITE_SUPABASE_PUBLISHABLE_KEY
         sync: false
+      - key: SITEFINDER_MCP_TOKEN_SHA256
+        value: a536da901c6ba6c3cf18a33b049a1c274013d5574dd0349a70fe47a0cdc36954

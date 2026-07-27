@@ -24,7 +24,9 @@ function publicProject(project) {
   return {
     site_id: siteNumber(project.Id),
     project_name: clean(project.Name),
+    main_contractor_id: clean(project.MainContractorId),
     main_contractor: clean(project.MainContractor),
+    client_id: clean(project.ClientId),
     client: clean(project.Client),
     local_authority: clean(project.LaId),
     latitude: Number.isFinite(Number(project.Latitude)) ? Number(project.Latitude) : null,
@@ -32,12 +34,17 @@ function publicProject(project) {
   };
 }
 
-export function createSiteFinderClient(baseUrl = process.env.SITEFINDER_URL || DEFAULT_BASE_URL) {
+export function createSiteFinderClient(
+  baseUrl = process.env.SITEFINDER_URL || DEFAULT_BASE_URL,
+  authToken = process.env.SITEFINDER_MCP_TOKEN,
+) {
   const origin = String(baseUrl).replace(/\/+$/, '');
 
   async function request(pathname) {
+    const headers = { Accept: 'application/json', 'User-Agent': 'GSD-SiteFinder-MCP/1.1' };
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
     const response = await fetch(`${origin}${pathname}`, {
-      headers: { Accept: 'application/json', 'User-Agent': 'GSD-SiteFinder-MCP/1.0' },
+      headers,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
