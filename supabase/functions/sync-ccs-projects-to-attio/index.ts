@@ -11,7 +11,7 @@ import {
   optionalValues,
   recordReference,
 } from '../_shared/attio.ts';
-import { safeBoolean } from '../_shared/values.ts';
+import { safeBoolean, safeBooleanWithFallback } from '../_shared/values.ts';
 
 const SITEFINDER_URL = 'https://gsd-sitefinder.onrender.com';
 const MAX_BATCH_SIZE = 25;
@@ -345,7 +345,7 @@ function deriveEnrichment(project: ProjectRow): Enrichment {
       : existing.registration_count ?? null,
     has_alerts: safeBoolean(details.Alerts),
     has_news: safeBoolean(details.News),
-    is_ultra_site: safeBoolean(details.UltraSite) || safeBoolean(project.source_data?.UltraSite),
+    is_ultra_site: safeBooleanWithFallback(details.UltraSite, project.source_data?.UltraSite),
     classification_method: existing.classification_method || 'ccs_deterministic_v1',
   };
 }

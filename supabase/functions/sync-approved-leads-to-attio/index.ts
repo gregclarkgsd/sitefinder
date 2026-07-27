@@ -20,6 +20,7 @@ const DEAL_ATTRIBUTES = [
     api_slug: 'ccs_site_id',
     type: 'text',
     description: 'Stable Considerate Constructors Scheme site identifier.',
+    is_unique: true,
   },
   {
     title: 'Open in SiteFinder',
@@ -233,6 +234,10 @@ Deno.serve(async (req: Request) => {
 
     const ensured = await ensureDealAttributes(attio, await attio.listAttributes('deals'));
     const warnings = [...ensured.warnings];
+    const ccsAttribute = findAttribute(ensured.attributes, ['ccs_site_id']);
+    if (!ccsAttribute?.is_writable) {
+      throw new Error('Attio Deals requires a writable CCS Site ID attribute for safe retry handling');
+    }
     const projectReference = await ensureProjectReference(
       attio,
       ensured.attributes,
@@ -242,24 +247,21 @@ Deno.serve(async (req: Request) => {
 
     let dealRecordId = dealLink?.attio_record_id || null;
     if (!dealRecordId) {
-      const ccsAttribute = findAttribute(ensured.attributes, ['ccs_site_id']);
-      if (ccsAttribute) {
-        const number = lead.project_id.replace(/^site/, '');
-        const matchValue = ccsAttribute.type === 'number' ? Number(number) : number;
-        let matches = await attio.queryRecords(
+      const number = lead.project_id.replace(/^site/, '');
+      const matchValue = ccsAttribute.type === 'number' ? Number(number) : number;
+      let matches = await attio.queryRecords(
+        'deals',
+        { [ccsAttribute.api_slug]: matchValue },
+        2,
+      );
+      if (!matches.length && ccsAttribute.type !== 'number') {
+        matches = await attio.queryRecords(
           'deals',
-          { [ccsAttribute.api_slug]: matchValue },
+          { [ccsAttribute.api_slug]: lead.project_id },
           2,
         );
-        if (!matches.length && ccsAttribute.type !== 'number') {
-          matches = await attio.queryRecords(
-            'deals',
-            { [ccsAttribute.api_slug]: lead.project_id },
-            2,
-          );
-        }
-        dealRecordId = matches[0]?.id.record_id || null;
       }
+      dealRecordId = matches[0]?.id.record_id || null;
     }
 
     const values: Record<string, unknown> = {};
