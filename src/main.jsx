@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Search, MapPin, Star, StickyNote, ExternalLink, X, RefreshCw, Building2, SlidersHorizontal, Phone, Mail, CalendarDays, Bookmark, BarChart3, Users, FolderKanban, ChevronLeft, ChevronRight, CheckSquare, Circle, CheckCircle2, Trash2, Plus } from 'lucide-react';
+import { Search, MapPin, Star, StickyNote, ExternalLink, X, RefreshCw, Building2, SlidersHorizontal, Phone, Mail, CalendarDays, Bookmark, BarChart3, Users, FolderKanban, ChevronLeft, ChevronRight, CheckSquare, Circle, CheckCircle2, Trash2, Plus, Megaphone } from 'lucide-react';
 import './styles.css';
 import './mobile.css';
 import AuthGate from './AuthGate';
+import { CommunicationTimeline, OutreachPage } from './Outreach';
 import { supabase } from './supabase';
 
 const API = '/api';
@@ -32,6 +33,7 @@ const navItems = [
   {id:'projects',label:'Projects',icon:FolderKanban},
   {id:'saved',label:'Saved',icon:Bookmark},
   {id:'tasks',label:'Tasks',icon:CheckSquare},
+  {id:'outreach',label:'Outreach',icon:Megaphone},
   {id:'insights',label:'Insights',icon:BarChart3},
   {id:'contractors',label:'Contractors',icon:Users},
 ];
@@ -46,6 +48,7 @@ function App({session,cloudEnabled}){
   const [saved,setSaved]=useState(()=>new Set(JSON.parse(localStorage.getItem('gsd-saved')||'[]'))), [notes,setNotes]=useState(()=>JSON.parse(localStorage.getItem('gsd-notes')||'{}'));
   const [history,setHistory]=useState({}), [syncStatus,setSyncStatus]=useState(null), [tracking,setTracking]=useState({});
   const [tasks,setTasks]=useState([]);
+  const [outreachLeads,setOutreachLeads]=useState([]), [communications,setCommunications]=useState([]), [suppressions,setSuppressions]=useState([]);
   const [draftFilters,setDraftFilters]=useState({location:'',contractor:'',client:'',recency:'',liveOnly:true}), [filters,setFilters]=useState({location:'',contractor:'',client:'',recency:'',liveOnly:true});
 
   const load=()=>{setLoading(true);setError('');fetch(`${API}/projects`).then(async r=>{if(!r.ok) throw new Error((await r.json()).error||'Unable to load CCS projects');return r.json()}).then(d=>setProjects(d.projects||fallback)).catch(err=>{setProjects(fallback);setError(`${err.message}. Showing cached examples.`)}).finally(()=>setLoading(false))};
@@ -56,8 +59,11 @@ function App({session,cloudEnabled}){
     fetchAllRows('ccs_projects','project_id,first_seen_at,last_seen_at,last_changed_at,discovered_after_baseline,is_active'),
     supabase.from('ccs_sync_runs').select('completed_at,total_projects,new_projects,changed_projects,detail_projects,detail_errors,status').eq('status','completed').order('completed_at',{ascending:false}).limit(1).maybeSingle(),
     supabase.from('lead_tracking').select('project_id,stage,assigned_email,next_action,next_action_at,updated_at'),
-    supabase.from('project_tasks').select('*').order('completed',{ascending:true}).order('due_date',{ascending:true,nullsFirst:false}).order('created_at',{ascending:false})
-  ]).then(([s,n,h,sync,t,taskRows])=>{if(s.data)setSaved(new Set(s.data.map(x=>x.project_id)));if(n.data)setNotes(Object.fromEntries(n.data.map(x=>[x.project_id,x.note])));if(h.data)setHistory(Object.fromEntries(h.data.map(x=>[x.project_id,x])));if(sync.data)setSyncStatus(sync.data);if(t.data)setTracking(Object.fromEntries(t.data.map(x=>[x.project_id,x])));if(taskRows.data)setTasks(taskRows.data)}) },[cloudEnabled]);
+    supabase.from('project_tasks').select('*').order('completed',{ascending:true}).order('due_date',{ascending:true,nullsFirst:false}).order('created_at',{ascending:false}),
+    fetchAllRows('outreach_leads','*'),
+    fetchAllRows('outreach_communications','*'),
+    fetchAllRows('outreach_suppressions','*')
+  ]).then(([s,n,h,sync,t,taskRows,outreachRows,communicationRows,suppressionRows])=>{if(s.data)setSaved(new Set(s.data.map(x=>x.project_id)));if(n.data)setNotes(Object.fromEntries(n.data.map(x=>[x.project_id,x.note])));if(h.data)setHistory(Object.fromEntries(h.data.map(x=>[x.project_id,x])));if(sync.data)setSyncStatus(sync.data);if(t.data)setTracking(Object.fromEntries(t.data.map(x=>[x.project_id,x])));if(taskRows.data)setTasks(taskRows.data);if(outreachRows.data)setOutreachLeads(outreachRows.data);if(communicationRows.data)setCommunications(communicationRows.data);if(suppressionRows.data)setSuppressions(suppressionRows.data)}) },[cloudEnabled]);
   useEffect(()=>setPage(1),[query,filters,activeView]);
 
   const options=useMemo(()=>({locations:unique(projects,'LaId'),contractors:unique(projects,'MainContractor'),clients:unique(projects,'Client')}),[projects]);
@@ -84,6 +90,33 @@ function App({session,cloudEnabled}){
   const createTask=async(p,input)=>{const optimistic={id:crypto.randomUUID(),project_id:p.Id,project_name:p.Name,title:input.title.trim(),assigned_email:input.assigned_email.trim()||null,due_date:input.due_date||null,completed:false,created_at:new Date().toISOString()};if(!optimistic.title)return false;setTasks(current=>[optimistic,...current]);if(cloudEnabled){const {data,error:taskError}=await supabase.from('project_tasks').insert({...optimistic,created_by:session.user.id,updated_by:session.user.id}).select().single();if(taskError){setTasks(current=>current.filter(task=>task.id!==optimistic.id));setError(`Could not create task: ${taskError.message}`);return false}setTasks(current=>current.map(task=>task.id===optimistic.id?data:task))}return true};
   const toggleTask=async task=>{const changes={completed:!task.completed,completed_at:task.completed?null:new Date().toISOString(),updated_at:new Date().toISOString()};setTasks(current=>current.map(item=>item.id===task.id?{...item,...changes}:item));if(cloudEnabled){const {error:taskError}=await supabase.from('project_tasks').update({...changes,updated_by:session.user.id}).eq('id',task.id);if(taskError){setTasks(current=>current.map(item=>item.id===task.id?task:item));setError(`Could not update task: ${taskError.message}`)}}};
   const deleteTask=async task=>{setTasks(current=>current.filter(item=>item.id!==task.id));if(cloudEnabled){const {error:taskError}=await supabase.from('project_tasks').delete().eq('id',task.id);if(taskError){setTasks(current=>[task,...current]);setError(`Could not delete task: ${taskError.message}`)}}};
+  const queueOutreach=async(p,record={})=>{
+    const existing=outreachLeads.find(lead=>lead.project_id===p.Id);
+    if(existing){setActiveView('outreach');setSelected(null);return true}
+    const contactName=[record.SiteManagerFirstName,record.SiteManagerLastName].filter(Boolean).join(' ')||null;
+    const company=value(record.MainContractor||p.MainContractor,'your team');
+    const row={id:crypto.randomUUID(),project_id:p.Id,project_name:p.Name,recipient_email:record.MarkerEmail||null,recipient_name:contactName,company_name:company,status:'queued',email_subject:`Painting and decorating support for ${p.Name}`,email_body:`Hi${contactName?` ${contactName.split(' ')[0]}`:''},\n\nI’m getting in touch from GSD Painting & Decorating regarding ${p.Name}.\n\nWe support main contractors with commercial painting and decorating packages across London and the Home Counties. If this package is still available, we would welcome the opportunity to introduce GSD and understand your requirements.\n\nWould you be the right person to speak with?\n\nKind regards,\nSam\nGSD Painting & Decorating`,created_at:new Date().toISOString(),updated_at:new Date().toISOString()};
+    setOutreachLeads(current=>[row,...current]);
+    if(cloudEnabled){const {data,error:outreachError}=await supabase.from('outreach_leads').insert({...row,created_by:session.user.id,updated_by:session.user.id}).select().single();if(outreachError){setOutreachLeads(current=>current.filter(lead=>lead.id!==row.id));setError(`Could not add outreach lead: ${outreachError.message}`);return false}setOutreachLeads(current=>current.map(lead=>lead.id===row.id?data:lead))}
+    setActiveView('outreach');setSelected(null);return true
+  };
+  const updateOutreach=async(lead,changes)=>{
+    const now=new Date().toISOString(), updates={...changes,updated_at:now};
+    if(changes.status==='approved'&&cloudEnabled)updates.approved_by=session.user.id;
+    const previous=lead;
+    setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,...updates}:item));
+    if(cloudEnabled){const {data,error:outreachError}=await supabase.from('outreach_leads').update({...updates,updated_by:session.user.id}).eq('id',lead.id).select().single();if(outreachError){setOutreachLeads(current=>current.map(item=>item.id===lead.id?previous:item));setError(`Could not update outreach: ${outreachError.message}`);return false}setOutreachLeads(current=>current.map(item=>item.id===lead.id?data:item))}
+    return true
+  };
+  const logCommunication=async(p,channel)=>{
+    const label=channel==='phone'?'Call notes':'Communication note', body=window.prompt(label,'');
+    if(body===null||!body.trim())return false;
+    const lead=outreachLeads.find(item=>item.project_id===p.Id);
+    const row={id:crypto.randomUUID(),project_id:p.Id,outreach_lead_id:lead?.id||null,direction:'internal',channel,status:'logged',subject:channel==='phone'?'Call logged':'Note added',body:body.trim(),occurred_at:new Date().toISOString(),created_at:new Date().toISOString()};
+    setCommunications(current=>[row,...current]);
+    if(cloudEnabled){const {data,error:communicationError}=await supabase.from('outreach_communications').insert({...row,created_by:session.user.id}).select().single();if(communicationError){setCommunications(current=>current.filter(item=>item.id!==row.id));setError(`Could not record communication: ${communicationError.message}`);return false}setCommunications(current=>current.map(item=>item.id===row.id?data:item))}
+    return true
+  };
   const clearFilters=()=>{const empty={location:'',contractor:'',client:'',recency:'',liveOnly:true};setDraftFilters(empty);setFilters(empty);setQuery('')};
   const goToView=id=>{setActiveView(id);setSelected(null)};
 
@@ -97,7 +130,7 @@ function App({session,cloudEnabled}){
       <SelectFilter label="Client" value={draftFilters.client} onChange={client=>setDraftFilters(x=>({...x,client}))} options={options.clients} allLabel="All clients"/>
       <button className="apply" onClick={()=>setFilters({...draftFilters})}><SlidersHorizontal size={16}/> Apply filters</button>
     </aside>}
-    <main className={(activeView==='insights'||activeView==='contractors'||activeView==='tasks')?'wide':''}>
+    <main className={(activeView==='insights'||activeView==='contractors'||activeView==='tasks'||activeView==='outreach')?'wide':''}>
       {(activeView==='projects'||activeView==='saved')&&<><section className="toolbar"><div><strong>{visibleProjects.length.toLocaleString()} {activeView==='saved'?'saved':'active'} projects</strong><button className="icon" onClick={load} aria-label="Refresh projects"><RefreshCw size={16}/></button></div><label className="search"><Search size={18}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search projects, contractors, clients, locations…" aria-label="Search projects"/></label><button className="filter-mobile" onClick={()=>document.querySelector('aside')?.classList.toggle('open')}><SlidersHorizontal size={17}/> Filters</button></section>
         {error&&<div className="notice" role="alert">{error}<button onClick={()=>setError('')}><X size={15}/></button></div>}
         {syncIsStale&&<div className="notice sync-warning" role="alert">CCS data may be out of date. The last successful nightly sync was {new Date(syncStatus.completed_at).toLocaleString('en-GB')}.</div>}
@@ -106,9 +139,10 @@ function App({session,cloudEnabled}){
       </>}
       {activeView==='insights'&&<Insights projects={projects} saved={saved} contractorStats={contractorStats}/>}
       {activeView==='tasks'&&<TaskDashboard tasks={tasks} projects={projects} openProject={open} toggleTask={toggleTask} deleteTask={deleteTask}/>}
+      {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} updateLead={updateOutreach}/>}
       {activeView==='contractors'&&<Contractors stats={contractorStats} onSelect={name=>{setDraftFilters(x=>({...x,contractor:name}));setFilters(x=>({...x,contractor:name}));goToView('projects')}}/>}
     </main>
-    {selected&&<ProjectDrawer selected={selected} detail={detail} close={()=>setSelected(null)} saved={saved.has(selected.Id)} toggleSave={()=>toggleSave(selected)} note={notes[selected.Id]} addNote={()=>addNote(selected)} meta={history[selected.Id]} tracking={tracking[selected.Id]} updateTracking={changes=>updateTracking(selected,changes)} tasks={tasks.filter(task=>task.project_id===selected.Id)} createTask={input=>createTask(selected,input)} toggleTask={toggleTask} deleteTask={deleteTask}/>}
+    {selected&&<ProjectDrawer selected={selected} detail={detail} close={()=>setSelected(null)} saved={saved.has(selected.Id)} toggleSave={()=>toggleSave(selected)} note={notes[selected.Id]} addNote={()=>addNote(selected)} meta={history[selected.Id]} tracking={tracking[selected.Id]} updateTracking={changes=>updateTracking(selected,changes)} tasks={tasks.filter(task=>task.project_id===selected.Id)} createTask={input=>createTask(selected,input)} toggleTask={toggleTask} deleteTask={deleteTask} outreachLead={outreachLeads.find(lead=>lead.project_id===selected.Id)} queueOutreach={()=>queueOutreach(selected,detail||{})} communications={communications.filter(item=>item.project_id===selected.Id)} logCommunication={channel=>logCommunication(selected,channel)}/>}
   </div>
 }
 
@@ -150,6 +184,6 @@ function projectDescription(detail,selected){
   return `${selected.Name} is an active CCS-registered construction project at ${address}, being delivered by ${contractor} for ${client}.${period} CCS has not published a more detailed scope of works for this registration.`;
 }
 
-function ProjectDrawer({selected,detail,close,saved,toggleSave,note,addNote,meta,tracking={},updateTracking,tasks,createTask,toggleTask,deleteTask}){return <div className="drawer" role="dialog" aria-label={`${selected.Name} project details`}><div className="drawer-head"><div><h2>{selected.Name}</h2><p>CCS {selected.Id.replace('site','')}{meta&&` · First seen ${fmtDate(meta.first_seen_at)}`}</p></div><button className="icon" onClick={close} aria-label="Close project details"><X/></button></div><div className="drawer-actions"><button onClick={toggleSave}><Star size={16} fill={saved?'currentColor':'none'}/>{saved?'Saved':'Save lead'}</button><button onClick={addNote}><StickyNote size={16}/>{note?'Edit note':'Add note'}</button></div><section className="lead-workflow"><h3>Lead workflow</h3><label>Stage<select value={tracking.stage||'new'} onChange={e=>updateTracking({stage:e.target.value})}>{STAGES.map(stage=><option key={stage} value={stage}>{stage[0].toUpperCase()+stage.slice(1)}</option>)}</select></label><label>Next action<input key={tracking.next_action||''} defaultValue={tracking.next_action||''} placeholder="e.g. Call the site manager" onBlur={e=>updateTracking({next_action:e.target.value})}/></label><label>Follow-up date<input type="date" value={tracking.next_action_at?.slice(0,10)||''} onChange={e=>updateTracking({next_action_at:e.target.value?new Date(`${e.target.value}T09:00:00`).toISOString():null})}/></label></section><ProjectTaskList tasks={tasks} createTask={createTask} toggleTask={toggleTask} deleteTask={deleteTask}/>{!detail?<div className="drawer-loading">Loading verified project record…</div>:<><section><h3>Project description</h3><p>{projectDescription(detail,selected)}</p></section><section><h3>Contact</h3><h4>{[detail.SiteManagerFirstName,detail.SiteManagerLastName].filter(Boolean).join(' ')||'Not published'}</h4><p>{detail.SiteManagerJobTitle||'Site contact'}</p>{detail.SiteManagerPhone&&<a href={`tel:${detail.SiteManagerPhone}`}><Phone size={15}/>{detail.SiteManagerPhone}</a>}{detail.MarkerEmail&&<a href={`mailto:${detail.MarkerEmail}`}><Mail size={15}/>{detail.MarkerEmail}</a>}</section><section className="facts"><h3>Project details</h3><dl><dt>Main Contractor</dt><dd>{value(detail.MainContractor||selected.MainContractor)}</dd><dt>Client</dt><dd>{value(detail.Client||selected.Client)}</dd><dt>Project Period</dt><dd><CalendarDays size={14}/>{fmtDate(detail.SiteStartDate)} – {fmtDate(detail.SiteEndDate)}</dd><dt>Address</dt><dd>{value(detail.Address||selected.LaId)}</dd><dt>Local Authority</dt><dd>{value(detail.LocalAuthority||selected.LaId)}</dd></dl></section><section><a className="source" href={detail.SourceUrl} target="_blank" rel="noreferrer">Open verified CCS source record <ExternalLink size={15}/></a></section></>}</div>}
+function ProjectDrawer({selected,detail,close,saved,toggleSave,note,addNote,meta,tracking={},updateTracking,tasks,createTask,toggleTask,deleteTask,outreachLead,queueOutreach,communications,logCommunication}){return <div className="drawer" role="dialog" aria-label={`${selected.Name} project details`}><div className="drawer-head"><div><h2>{selected.Name}</h2><p>CCS {selected.Id.replace('site','')}{meta&&` · First seen ${fmtDate(meta.first_seen_at)}`}</p></div><button className="icon" onClick={close} aria-label="Close project details"><X/></button></div><div className="drawer-actions"><button onClick={toggleSave}><Star size={16} fill={saved?'currentColor':'none'}/>{saved?'Saved':'Save lead'}</button><button onClick={addNote}><StickyNote size={16}/>{note?'Edit note':'Add note'}</button><button onClick={queueOutreach}><Megaphone size={16}/>{outreachLead?'Open outreach':'Add to outreach'}</button></div><section className="lead-workflow"><h3>Lead workflow</h3><label>Stage<select value={tracking.stage||'new'} onChange={e=>updateTracking({stage:e.target.value})}>{STAGES.map(stage=><option key={stage} value={stage}>{stage[0].toUpperCase()+stage.slice(1)}</option>)}</select></label><label>Next action<input key={tracking.next_action||''} defaultValue={tracking.next_action||''} placeholder="e.g. Call the site manager" onBlur={e=>updateTracking({next_action:e.target.value})}/></label><label>Follow-up date<input type="date" value={tracking.next_action_at?.slice(0,10)||''} onChange={e=>updateTracking({next_action_at:e.target.value?new Date(`${e.target.value}T09:00:00`).toISOString():null})}/></label></section><ProjectTaskList tasks={tasks} createTask={createTask} toggleTask={toggleTask} deleteTask={deleteTask}/><section><div className="section-title"><h3>Communication history</h3></div><CommunicationTimeline communications={communications}/><div className="communication-actions"><button onClick={()=>logCommunication('phone')}><Phone size={15}/> Log call</button><button onClick={()=>logCommunication('note')}><StickyNote size={15}/> Add note</button></div></section>{!detail?<div className="drawer-loading">Loading verified project record…</div>:<><section><h3>Project description</h3><p>{projectDescription(detail,selected)}</p></section><section><h3>Contact</h3><h4>{[detail.SiteManagerFirstName,detail.SiteManagerLastName].filter(Boolean).join(' ')||'Not published'}</h4><p>{detail.SiteManagerJobTitle||'Site contact'}</p>{detail.SiteManagerPhone&&<a href={`tel:${detail.SiteManagerPhone}`}><Phone size={15}/>{detail.SiteManagerPhone}</a>}{detail.MarkerEmail&&<a href={`mailto:${detail.MarkerEmail}`}><Mail size={15}/>{detail.MarkerEmail}</a>}</section><section className="facts"><h3>Project details</h3><dl><dt>Main Contractor</dt><dd>{value(detail.MainContractor||selected.MainContractor)}</dd><dt>Client</dt><dd>{value(detail.Client||selected.Client)}</dd><dt>Project Period</dt><dd><CalendarDays size={14}/>{fmtDate(detail.SiteStartDate)} – {fmtDate(detail.SiteEndDate)}</dd><dt>Address</dt><dd>{value(detail.Address||selected.LaId)}</dd><dt>Local Authority</dt><dd>{value(detail.LocalAuthority||selected.LaId)}</dd></dl></section><section><a className="source" href={detail.SourceUrl} target="_blank" rel="noreferrer">Open verified CCS source record <ExternalLink size={15}/></a></section></>}</div>}
 
 createRoot(document.getElementById('root')).render(<AuthGate>{props=><App {...props}/>}</AuthGate>);
