@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Search, MapPin, Star, StickyNote, ExternalLink, X, RefreshCw, Building2, SlidersHorizontal, Phone, Mail, CalendarDays, Bookmark, BarChart3, Users, FolderKanban, ChevronLeft, ChevronRight, CheckSquare, Circle, CheckCircle2, Trash2, Plus, Megaphone } from 'lucide-react';
 import './styles.css';
@@ -68,6 +68,7 @@ function App({session,cloudEnabled}){
   const [tasks,setTasks]=useState([]);
   const [outreachLeads,setOutreachLeads]=useState([]), [communications,setCommunications]=useState([]), [suppressions,setSuppressions]=useState([]);
   const [draftFilters,setDraftFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',liveOnly:true}), [filters,setFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',liveOnly:true});
+  const draftFiltersRef=useRef(draftFilters);
 
   const load=()=>{setLoading(true);setError('');apiFetch(`${API}/projects`).then(async r=>{if(!r.ok) throw new Error((await r.json()).error||'Unable to load CCS projects');return r.json()}).then(d=>setProjects(d.projects||fallback)).catch(err=>{setProjects(fallback);setError(`${err.message}. Showing cached examples.`)}).finally(()=>setLoading(false))};
   useEffect(load,[]);
@@ -143,19 +144,21 @@ function App({session,cloudEnabled}){
     if(cloudEnabled){const {data,error:communicationError}=await supabase.from('outreach_communications').insert({...row,created_by:session.user.id}).select().single();if(communicationError){setCommunications(current=>current.filter(item=>item.id!==row.id));setError(`Could not record communication: ${communicationError.message}`);return false}setCommunications(current=>current.map(item=>item.id===row.id?data:item))}
     return true
   };
-  const clearFilters=()=>{const empty={location:'',contractor:'',client:'',recency:'',completionWindow:'',liveOnly:true};setDraftFilters(empty);setFilters(empty);setQuery('')};
+  const updateDraftFilter=(key,nextValue)=>setDraftFilters(current=>{const next={...current,[key]:nextValue};draftFiltersRef.current=next;return next});
+  const applyFilters=()=>setFilters({...draftFiltersRef.current});
+  const clearFilters=()=>{const empty={location:'',contractor:'',client:'',recency:'',completionWindow:'',liveOnly:true};draftFiltersRef.current=empty;setDraftFilters(empty);setFilters(empty);setQuery('')};
   const goToView=id=>{setActiveView(id);setSelected(null)};
 
   return <div className="app">
     <header><div className="brand"><Building2/><b>GSD</b> SiteFinder</div><nav aria-label="Primary navigation">{navItems.map(({id,label,icon:Icon})=><button key={id} className={activeView===id?'active':''} onClick={()=>goToView(id)}><Icon size={16}/>{label}{id==='saved'&&saved.size>0&&<span>{saved.size}</span>}</button>)}</nav><button className="user" onClick={()=>cloudEnabled&&supabase.auth.signOut()} title={cloudEnabled?'Sign out':'Local preview'}>{session?.user?.email?.slice(0,2).toUpperCase()||'GC'}</button></header>
     {(activeView==='projects'||activeView==='saved')&&<aside><div className="aside-title"><b>Filters</b><button onClick={clearFilters}>Clear all</button></div>
-      <SelectFilter label="Location" value={draftFilters.location} onChange={location=>setDraftFilters(x=>({...x,location}))} options={options.locations} allLabel="All locations"/>
-      <SelectFilter label="Lead activity" value={draftFilters.recency} onChange={recency=>setDraftFilters(x=>({...x,recency}))} options={['new','updated']} allLabel="All project activity"/>
-      <label className="filter"><span>Completion window</span><select value={draftFilters.completionWindow} onChange={e=>setDraftFilters(x=>({...x,completionWindow:e.target.value}))}><option value="">Any completion date</option><option value="next-3">Completing in 0–3 months</option><option value="3-9">Decorating window: 3–9 months</option><option value="9-18">Completing in 9–18 months</option><option value="past">Past completion date</option><option value="unknown">Completion date unknown</option></select></label>
-      <label className="switch-row"><span>Live Sites Only</span><input type="checkbox" checked={draftFilters.liveOnly} onChange={e=>setDraftFilters(x=>({...x,liveOnly:e.target.checked}))}/><i/></label>
-      <SelectFilter label="Contractor" value={draftFilters.contractor} onChange={contractor=>setDraftFilters(x=>({...x,contractor}))} options={options.contractors} allLabel="All contractors"/>
-      <SelectFilter label="Client" value={draftFilters.client} onChange={client=>setDraftFilters(x=>({...x,client}))} options={options.clients} allLabel="All clients"/>
-      <button className="apply" onClick={()=>setFilters({...draftFilters})}><SlidersHorizontal size={16}/> Apply filters</button>
+      <SelectFilter label="Location" value={draftFilters.location} onChange={location=>updateDraftFilter('location',location)} options={options.locations} allLabel="All locations"/>
+      <SelectFilter label="Lead activity" value={draftFilters.recency} onChange={recency=>updateDraftFilter('recency',recency)} options={['new','updated']} allLabel="All project activity"/>
+      <label className="filter"><span>Completion window</span><select value={draftFilters.completionWindow} onChange={e=>updateDraftFilter('completionWindow',e.target.value)}><option value="">Any completion date</option><option value="next-3">Completing in 0–3 months</option><option value="3-9">Decorating window: 3–9 months</option><option value="9-18">Completing in 9–18 months</option><option value="past">Past completion date</option><option value="unknown">Completion date unknown</option></select></label>
+      <label className="switch-row"><span>Live Sites Only</span><input type="checkbox" checked={draftFilters.liveOnly} onChange={e=>updateDraftFilter('liveOnly',e.target.checked)}/><i/></label>
+      <SelectFilter label="Contractor" value={draftFilters.contractor} onChange={contractor=>updateDraftFilter('contractor',contractor)} options={options.contractors} allLabel="All contractors"/>
+      <SelectFilter label="Client" value={draftFilters.client} onChange={client=>updateDraftFilter('client',client)} options={options.clients} allLabel="All clients"/>
+      <button className="apply" onClick={applyFilters}><SlidersHorizontal size={16}/> Apply filters</button>
     </aside>}
     <main className={(activeView==='insights'||activeView==='contractors'||activeView==='tasks'||activeView==='outreach')?'wide':''}>
       {(activeView==='projects'||activeView==='saved')&&<><section className="toolbar"><div><strong>{visibleProjects.length.toLocaleString()} {activeView==='saved'?'saved':'active'} projects</strong><button className="icon" onClick={load} aria-label="Refresh projects"><RefreshCw size={16}/></button></div><label className="search"><Search size={18}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search projects, contractors, clients, locations…" aria-label="Search projects"/></label><button className="filter-mobile" onClick={()=>document.querySelector('aside')?.classList.toggle('open')}><SlidersHorizontal size={17}/> Filters</button></section>
@@ -167,7 +170,7 @@ function App({session,cloudEnabled}){
       {activeView==='insights'&&<Insights projects={projects} saved={saved} contractorStats={contractorStats}/>}
       {activeView==='tasks'&&<TaskDashboard tasks={tasks} projects={projects} openProject={open} toggleTask={toggleTask} deleteTask={deleteTask}/>}
       {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} updateLead={updateOutreach} syncToAttio={syncOutreachToAttio}/>}
-      {activeView==='contractors'&&<Contractors stats={contractorStats} onSelect={name=>{setDraftFilters(x=>({...x,contractor:name}));setFilters(x=>({...x,contractor:name}));goToView('projects')}}/>}
+      {activeView==='contractors'&&<Contractors stats={contractorStats} onSelect={name=>{updateDraftFilter('contractor',name);setFilters(x=>({...x,contractor:name}));goToView('projects')}}/>}
     </main>
     {selected&&<ProjectDrawer selected={selected} detail={detail} close={()=>setSelected(null)} saved={saved.has(selected.Id)} toggleSave={()=>toggleSave(selected)} note={notes[selected.Id]} addNote={()=>addNote(selected)} meta={history[selected.Id]} tracking={tracking[selected.Id]} updateTracking={changes=>updateTracking(selected,changes)} tasks={tasks.filter(task=>task.project_id===selected.Id)} createTask={input=>createTask(selected,input)} toggleTask={toggleTask} deleteTask={deleteTask} outreachLead={outreachLeads.find(lead=>lead.project_id===selected.Id)} queueOutreach={()=>queueOutreach(selected,detail||{})} communications={communications.filter(item=>item.project_id===selected.Id)} logCommunication={channel=>logCommunication(selected,channel)}/>}
   </div>
