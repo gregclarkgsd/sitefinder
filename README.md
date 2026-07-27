@@ -41,3 +41,40 @@ Supabase Vault secret `ccs_sync_token`; do not commit that value.
 - Detail record: `https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails/{SITE_ID}/null`
 
 Use is intended for authorised GSD Decorating employees and remains subject to CCS terms and applicable data-protection requirements.
+
+## MCP access for Codex and Claude Code
+
+The repository includes a read-only MCP server at `mcp/stdio.js`. It gives coding
+agents five direct SiteFinder tools:
+
+- `search_projects`
+- `get_project`
+- `list_contractors`
+- `list_locations`
+- `sitefinder_status`
+
+The MCP process reads from the production SiteFinder API by default and never
+receives a Supabase secret key. To point it at another deployment, set
+`SITEFINDER_URL`.
+
+Run its end-to-end smoke test:
+
+```bash
+npm run mcp:test
+```
+
+Register it with Codex:
+
+```bash
+codex mcp add gsd-sitefinder -- node "/absolute/path/to/gsd-sitefinder/mcp/stdio.js"
+```
+
+Register it with Claude Code for the current user:
+
+```bash
+claude mcp add --scope user gsd-sitefinder -- node "/absolute/path/to/gsd-sitefinder/mcp/stdio.js"
+```
+
+This first version is intentionally read-only. Saved leads, notes, lead stages
+and tasks remain protected by Supabase authentication and cannot be modified
+through MCP.
