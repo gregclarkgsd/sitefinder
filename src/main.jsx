@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Search, MapPin, Map as MapIcon, LocateFixed, MoreHorizontal, Star, StickyNote, ExternalLink, X, RefreshCw, Building2, SlidersHorizontal, Phone, Mail, CalendarDays, Bookmark, BarChart3, Users, FolderKanban, ChevronLeft, ChevronRight, CheckSquare, Circle, CheckCircle2, Trash2, Plus, Megaphone } from 'lucide-react';
+import { Search, MapPin, Map as MapIcon, LocateFixed, MoreHorizontal, ArrowUp, ArrowDown, ArrowUpDown, Star, StickyNote, ExternalLink, X, RefreshCw, Building2, SlidersHorizontal, Phone, Mail, CalendarDays, Bookmark, BarChart3, Users, FolderKanban, ChevronLeft, ChevronRight, CheckSquare, Circle, CheckCircle2, Trash2, Plus, Megaphone } from 'lucide-react';
 import './styles.css';
 import './mobile.css';
 import AuthGate from './AuthGate';
@@ -194,7 +194,29 @@ function Insights({projects,saved,contractorStats}){
   return <section className="dashboard"><div className="page-heading"><div><span>Portfolio overview</span><h1>Project insights</h1><p>Live summary of the CCS projects in your target region.</p></div></div><div className="stats"><article><span>Active projects</span><strong>{projects.length}</strong></article><article><span>Saved leads</span><strong>{saved.size}</strong></article><article><span>Contractors</span><strong>{contractorStats.length}</strong></article><article><span>Locations</span><strong>{locations.length}</strong></article></div><div className="insight-grid"><article className="panel"><h2>Top project locations</h2>{locations.map(([name,count])=><div className="bar-row" key={name}><div><span>{name}</span><b>{count}</b></div><i><em style={{width:`${count/max*100}%`}}/></i></div>)}</article><article className="panel"><h2>Leading contractors</h2>{contractorStats.slice(0,8).map((item,index)=><div className="rank" key={item.name}><span>{index+1}</span><div><b>{item.name}</b><small>{item.locations.size} locations</small></div><strong>{item.count}</strong></div>)}</article></div></section>;
 }
 
-function Contractors({stats,onSelect}){return <section className="dashboard"><div className="page-heading"><div><span>Directory</span><h1>Contractors</h1><p>Companies delivering active CCS projects in London and the Home Counties.</p></div></div><div className="contractor-grid">{stats.map(item=><button className="contractor-card" key={item.name} onClick={()=>onSelect(item.name)}><div className="contractor-icon"><Building2/></div><div><h2>{item.name}</h2><p>{item.count} active project{item.count===1?'':'s'} · {item.locations.size} location{item.locations.size===1?'':'s'}</p></div><ChevronRight/></button>)}</div></section>}
+function ContractorSortHeader({label,sortKey,sort,onSort,className=''}) {
+  const active=sort.key===sortKey, direction=active?sort.direction:null;
+  const Icon=!active?ArrowUpDown:direction==='asc'?ArrowUp:ArrowDown;
+  return <th className={className} aria-sort={!active?'none':direction==='asc'?'ascending':'descending'}><button type="button" onClick={()=>onSort(sortKey)} aria-label={`Sort contractors by ${label} ${active&&direction==='asc'?'descending':'ascending'}`}>{label}<Icon size={14}/></button></th>;
+}
+
+function Contractors({stats,onSelect}){
+  const [sort,setSort]=useState({key:'projects',direction:'desc'});
+  const rows=useMemo(()=>stats.map(item=>{
+    const locationNames=[...item.locations].sort((a,b)=>a.localeCompare(b));
+    return {...item,locationNames,primaryLocation:locationNames[0]||'Location not published'};
+  }).sort((a,b)=>{
+    let result=0;
+    if(sort.key==='contractor')result=a.name.localeCompare(b.name);
+    if(sort.key==='location')result=a.primaryLocation.localeCompare(b.primaryLocation);
+    if(sort.key==='projects')result=a.count-b.count;
+    return (sort.direction==='asc'?result:-result)||a.name.localeCompare(b.name);
+  }),[sort,stats]);
+  const changeSort=key=>setSort(current=>current.key===key
+    ? {...current,direction:current.direction==='asc'?'desc':'asc'}
+    : {key,direction:key==='projects'?'desc':'asc'});
+  return <section className="dashboard contractors-page"><div className="page-heading"><div><span>Directory</span><h1>Contractors</h1><p>Companies delivering active CCS projects in London and the Home Counties.</p></div></div><div className="contractor-table-shell"><table className="contractor-table"><thead><tr><ContractorSortHeader label="Contractor A–Z" sortKey="contractor" sort={sort} onSort={changeSort}/><ContractorSortHeader label="Location" sortKey="location" sort={sort} onSort={changeSort}/><ContractorSortHeader label="Active projects" sortKey="projects" sort={sort} onSort={changeSort} className="number-column"/><th aria-label="Open contractor projects"/></tr></thead><tbody>{rows.map(item=><tr key={item.name}><td><div className="contractor-name"><span className="contractor-icon"><Building2 size={19}/></span><button type="button" onClick={()=>onSelect(item.name)}>{item.name}</button></div></td><td><span>{item.primaryLocation}</span><small>{item.locations.size} location{item.locations.size===1?'':'s'}{item.locationNames.length>1?` · +${item.locationNames.length-1} more`:''}</small></td><td className="number-column"><strong>{item.count}</strong></td><td><button className="contractor-open" type="button" onClick={()=>onSelect(item.name)} aria-label={`View projects for ${item.name}`}><ChevronRight size={18}/></button></td></tr>)}</tbody></table></div></section>
+}
 
 function TaskDashboard({tasks,projects,openProject,toggleTask,deleteTask}){
   const openTasks=tasks.filter(task=>!task.completed), completed=tasks.filter(task=>task.completed), overdue=openTasks.filter(task=>task.due_date&&new Date(`${task.due_date}T23:59:59`)<new Date());
