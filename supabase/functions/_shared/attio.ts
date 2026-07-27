@@ -36,6 +36,7 @@ export class AttioError extends Error {
 
 export class AttioClient {
   token: string;
+  selectOptionCache = new Map<string, Array<{ title: string }>>();
 
   constructor(token: string) {
     this.token = token;
@@ -166,6 +167,33 @@ export class AttioClient {
         body: { data: { title, celebration_enabled: false } },
       },
     );
+    return body.data;
+  }
+
+  async listSelectOptions(object: string, attribute: string) {
+    const cacheKey = `${object}:${attribute}`;
+    const cached = this.selectOptionCache.get(cacheKey);
+    if (cached) return cached;
+    const body = await this.request<{ data: Array<{ title: string }> }>(
+      `/objects/${encodeURIComponent(object)}/attributes/${encodeURIComponent(attribute)}/options?limit=500`,
+    );
+    this.selectOptionCache.set(cacheKey, body.data);
+    return body.data;
+  }
+
+  async createSelectOption(object: string, attribute: string, title: string) {
+    const body = await this.request<{ data: { title: string } }>(
+      `/objects/${encodeURIComponent(object)}/attributes/${encodeURIComponent(attribute)}/options`,
+      {
+        method: 'POST',
+        body: { data: { title } },
+      },
+    );
+    const cacheKey = `${object}:${attribute}`;
+    this.selectOptionCache.set(cacheKey, [
+      ...(this.selectOptionCache.get(cacheKey) || []),
+      body.data,
+    ]);
     return body.data;
   }
 }

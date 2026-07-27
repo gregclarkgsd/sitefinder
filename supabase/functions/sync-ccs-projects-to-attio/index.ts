@@ -483,6 +483,27 @@ function putReference(
   }
 }
 
+async function ensureSelectValues(
+  attio: AttioClient,
+  object: string,
+  attributes: AttioAttribute[],
+  values: Record<string, unknown>,
+) {
+  for (const attribute of attributes) {
+    if (attribute.type !== 'select' || !(attribute.api_slug in values)) continue;
+    const requested = String(values[attribute.api_slug] || '').trim();
+    if (!requested) continue;
+    const options = await attio.listSelectOptions(object, attribute.api_slug);
+    const existing = options.find(option => option.title.toLowerCase() === requested.toLowerCase());
+    if (existing) {
+      values[attribute.api_slug] = existing.title;
+    } else {
+      const created = await attio.createSelectOption(object, attribute.api_slug, requested);
+      values[attribute.api_slug] = created.title;
+    }
+  }
+}
+
 async function findLink(
   db: DbClient,
   entityType: string,
@@ -696,6 +717,7 @@ async function upsertProjectRecord(
 
   const idAttribute = findAttribute(attributes, ['ccs_site_id', 'ccs id', 'ccs number']);
   if (!idAttribute) throw new Error('Projects object has no CCS Site ID attribute');
+  await ensureSelectValues(attio, object, attributes, values);
   const existing = await findProjectRecord(attio, object, idAttribute, project.project_id);
 
   try {
