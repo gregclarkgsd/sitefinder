@@ -28,3 +28,4 @@ tbody td{height:63px;padding-top:12px;padding-bottom:12px;border-bottom:0;vertic
 tbody td:nth-child(3) svg{margin-right:6px;vertical-align:-2px}
 th:nth-child(n+5),td:nth-child(n+5){text-align:center}
 @media(min-width:701px){tbody td:nth-child(3){display:table-cell}}
+.projects-table{min-width:1260px}.projects-table .date-cell{white-space:nowrap;font-variant-numeric:tabular-nums;color:#334155}.projects-table .date-cell.missing{color:var(--muted);font-size:11px}

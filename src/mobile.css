@@ -6,4 +6,16 @@
   th:nth-child(3),td:nth-child(3),th:nth-child(4),td:nth-child(4),th:nth-child(6),td:nth-child(6),th:nth-child(7),td:nth-child(7){display:none}
   th:nth-child(1){width:42%}th:nth-child(2){width:37%}th:nth-child(5){width:21%}
   .reveal{padding:7px 12px}.brand{font-size:19px}
+  .projects-table{min-width:0;table-layout:fixed}
+  .projects-table th,.projects-table td{display:table-cell}
+  .projects-table th:nth-child(1),.projects-table td:nth-child(1){width:30%}
+  .projects-table th:nth-child(2),.projects-table td:nth-child(2){width:23%}
+  .projects-table th:nth-child(3),.projects-table td:nth-child(3),.projects-table th:nth-child(4),.projects-table td:nth-child(4),.projects-table th:nth-child(8),.projects-table td:nth-child(8),.projects-table th:nth-child(9),.projects-table td:nth-child(9){display:none}
+  .projects-table th:nth-child(5),.projects-table td:nth-child(5),.projects-table th:nth-child(6),.projects-table td:nth-child(6){width:15%}
+  .projects-table th:nth-child(7),.projects-table td:nth-child(7){width:17%}
+}
+@media(max-width:600px){
+  .projects-table th:nth-child(1),.projects-table td:nth-child(1){width:46%}
+  .projects-table th:nth-child(2),.projects-table td:nth-child(2),.projects-table th:nth-child(7),.projects-table td:nth-child(7){display:none}
+  .projects-table th:nth-child(5),.projects-table td:nth-child(5),.projects-table th:nth-child(6),.projects-table td:nth-child(6){width:27%}
 }
