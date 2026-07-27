@@ -33,6 +33,8 @@ The production Supabase project runs `sync-ccs-projects` nightly through Supabas
 
 - records new and archived marker records;
 - refreshes every eligible CCS detail record with bounded concurrency;
+- pages through the complete existing project table, rather than treating rows
+  after Supabase's 1,000-row response limit as new;
 - fingerprints contact, address, date, closure and description fields for change detection;
 - records per-run marker totals, detail totals and detail errors;
 - preserves the last successful sync time for the application freshness warning.
@@ -68,6 +70,12 @@ The MCP server reads through the authenticated SiteFinder API and never receives
 a Supabase secret key. The hosted server stores only the SHA-256 hash of its
 long random bearer credential. Do not use the bearer token in frontend code or
 commit it to Git.
+
+The hosted endpoint also publishes OAuth protected-resource metadata and uses
+the Supabase OAuth 2.1 server. Claude.ai custom connectors can therefore connect
+to the `/mcp` URL, sign in with an authorised `@gsdecorating.com` account and
+approve the read-only connection on `/oauth/consent`. Claude Code can continue
+to use the static server-only bearer token shown below.
 
 Run its end-to-end smoke test:
 
@@ -109,3 +117,23 @@ and tasks remain protected by Supabase authentication and cannot be modified
 through MCP. Search results include the CCS site ID plus stable
 `MainContractorId` and `ClientId` join keys. `get_project` returns the public CCS
 detail record with address, dates and published contact fields.
+
+Project search accepts start and completion date windows. SiteFinder's
+completion filter includes a dedicated 3–9 month decorating window.
+
+## Approved lead handoff to Attio
+
+Only a lead explicitly approved in SiteFinder is asserted into Attio's standard
+Deals object, matched by the unique `CCS Site ID` attribute. Unreviewed CCS
+projects remain in SiteFinder and are never bulk-loaded into the CRM. The Edge
+Function `sync-approved-leads-to-attio` requires a signed-in GSD user and stores
+its API token only in Supabase Edge Function secrets:
+
+```text
+ATTIO_ACCESS_TOKEN
+ATTIO_DEFAULT_OWNER_ID
+```
+
+Approval does not send email. It creates or updates the Attio deal and records
+the Attio record ID, sync time and any error against the outreach lead. Email
+sending remains locked until Sam's mailbox is deliberately connected.

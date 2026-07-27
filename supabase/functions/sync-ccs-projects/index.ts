@@ -65,6 +65,20 @@ async function concurrentMap<T, R>(items: T[], limit: number, worker: (item: T) 
   return results;
 }
 
+async function fetchExistingProjects(db: ReturnType<typeof createClient>) {
+  const rows = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from('ccs_projects')
+      .select('project_id,payload_hash,detail_hash,first_seen_at,discovered_after_baseline,last_changed_at,detail_last_checked_at,detail_data')
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) return rows;
+  }
+}
+
 Deno.serve(async request => {
   if (request.headers.get('x-sync-token') !== Deno.env.get('CCS_SYNC_TOKEN')) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
@@ -88,14 +102,11 @@ Deno.serve(async request => {
     const allMarkers = await markerResponse.json() as JsonRecord[];
     const projects = allMarkers.filter(project => TARGET_AUTHORITY.test(String(project.LaId || '')));
 
-    const { data: existing, error: existingError } = await db
-      .from('ccs_projects')
-      .select('project_id,payload_hash,detail_hash,first_seen_at,discovered_after_baseline,last_changed_at,detail_data');
-    if (existingError) throw existingError;
+    const existing = await fetchExistingProjects(db);
 
     const baseline = existing.length === 0;
     const previous = new Map(existing.map(row => [row.project_id, row]));
-    const now = new Date().toISOString();
+    const observedAt = new Date().toISOString();
     let detailProjects = 0;
     let detailErrors = 0;
 
@@ -142,9 +153,9 @@ Deno.serve(async request => {
         local_authority: detail?.LocalAuthority || project.LaId || null,
         latitude: project.Latitude || null,
         longitude: project.Longitude || null,
-        first_seen_at: before?.first_seen_at || now,
-        last_seen_at: now,
-        last_changed_at: isNew || changed ? now : before.last_changed_at,
+        first_seen_at: before?.first_seen_at || observedAt,
+        last_seen_at: observedAt,
+        last_changed_at: isNew || changed ? observedAt : before.last_changed_at,
         discovered_after_baseline: before?.discovered_after_baseline ?? !baseline,
         is_active: true,
         payload_hash: payloadHash,
@@ -160,7 +171,7 @@ Deno.serve(async request => {
         summary: detail?.Summary || detail?.ContractorText || null,
         last_visit_date: detail?.LastVisitDate || null,
         detail_hash: detailHash,
-        detail_last_checked_at: detailError ? before?.detail_last_checked_at || null : now,
+        detail_last_checked_at: detailError ? before?.detail_last_checked_at || null : observedAt,
         detail_error: detailError,
         detail_data: detail || before?.detail_data || null,
       });
@@ -179,8 +190,30 @@ Deno.serve(async request => {
       if (upsertError) throw upsertError;
     }
 
+    const { error: inactiveScheduleError } = await db
+      .from('ccs_project_schedule')
+      .update({ is_active: false, updated_at: observedAt })
+      .eq('is_active', true);
+    if (inactiveScheduleError) throw inactiveScheduleError;
+
+    const scheduleRows = rows.map(row => ({
+      project_id: row.project_id,
+      site_start_date: row.site_start_date,
+      site_end_date: row.site_end_date,
+      site_closed: row.site_closed,
+      is_active: true,
+      updated_at: observedAt,
+    }));
+    for (let index = 0; index < scheduleRows.length; index += 500) {
+      const { error: scheduleError } = await db
+        .from('ccs_project_schedule')
+        .upsert(scheduleRows.slice(index, index + 500), { onConflict: 'project_id' });
+      if (scheduleError) throw scheduleError;
+    }
+
+    const completedAt = new Date().toISOString();
     await db.from('ccs_sync_runs').update({
-      completed_at: now,
+      completed_at: completedAt,
       status: 'completed',
       total_projects: projects.length,
       new_projects: newProjects,

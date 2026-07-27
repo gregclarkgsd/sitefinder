@@ -10,9 +10,16 @@ const app = express();
 const PORT = process.env.PORT || 8787;
 const MARKERS = 'https://ccsfilestore.blob.core.windows.net/constructionmap/live/json/sitemarkers.json';
 const DETAILS = 'https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails';
-let markerCache = { at: 0, data: [] };
+const CACHE_TTL_MS = 30 * 60_000;
+const SCHEDULE_CACHE_TTL_MS = 15 * 60_000;
+let markerCache = { at: 0, data: [], lastAttemptAt: 0, lastError: null };
+let markerRefresh = null;
+let scheduleCache = { at: 0, data: new Map(), lastAttemptAt: 0, lastError: null };
+let scheduleRefresh = null;
 const supabaseUrl = process.env.VITE_SUPABASE_URL;
 const supabaseKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const siteFinderOrigin = String(process.env.SITEFINDER_URL || 'https://gsd-sitefinder.onrender.com').replace(/\/+$/, '');
+const oauthIssuer = supabaseUrl ? `${supabaseUrl.replace(/\/+$/, '')}/auth/v1` : null;
 const mcpTokenHash = process.env.SITEFINDER_MCP_TOKEN_SHA256
   || 'a536da901c6ba6c3cf18a33b049a1c274013d5574dd0349a70fe47a0cdc36954';
 const authClient = supabaseUrl && supabaseKey
@@ -45,6 +52,11 @@ function isLocalPreview(req) {
     && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address);
 }
 
+function setAuthChallenge(res) {
+  const resourceMetadata = `${siteFinderOrigin}/.well-known/oauth-protected-resource/mcp`;
+  res.set('WWW-Authenticate', `Bearer realm="GSD SiteFinder", resource_metadata="${resourceMetadata}"`);
+}
+
 async function requireSiteFinderAuth(req, res, next) {
   if (isLocalPreview(req)) {
     req.siteFinderAuth = { type: 'local', email: 'local-preview' };
@@ -59,7 +71,7 @@ async function requireSiteFinderAuth(req, res, next) {
   }
 
   if (!token || !authClient) {
-    res.set('WWW-Authenticate', 'Bearer realm="GSD SiteFinder"');
+    setAuthChallenge(res);
     return res.status(401).json({ error: 'Authentication required' });
   }
 
@@ -67,7 +79,7 @@ async function requireSiteFinderAuth(req, res, next) {
     const { data, error } = await authClient.auth.getUser(token);
     const email = String(data.user?.email || '').toLowerCase();
     if (error || !email.endsWith('@gsdecorating.com')) {
-      res.set('WWW-Authenticate', 'Bearer realm="GSD SiteFinder"');
+      setAuthChallenge(res);
       return res.status(401).json({ error: 'Invalid or unauthorised session' });
     }
     req.siteFinderAuth = { type: 'user', email, userId: data.user.id };
@@ -97,22 +109,101 @@ export function isTargetProject(project) {
 }
 
 async function markers() {
-  if (Date.now() - markerCache.at < 30 * 60_000 && markerCache.data.length) return markerCache.data;
-  const response = await fetch(MARKERS);
-  if (!response.ok) throw new Error(`CCS marker feed returned ${response.status}`);
-  const raw = await response.json();
-  markerCache = { at: Date.now(), data: raw };
-  return raw;
+  if (Date.now() - markerCache.at < CACHE_TTL_MS && markerCache.data.length) return markerCache.data;
+  if (markerRefresh) return markerRefresh;
+  markerRefresh = (async () => {
+    markerCache.lastAttemptAt = Date.now();
+    try {
+      const response = await fetch(MARKERS, { signal: AbortSignal.timeout(20_000) });
+      if (!response.ok) throw new Error(`CCS marker feed returned ${response.status}`);
+      const raw = await response.json();
+      markerCache = {
+        at: Date.now(),
+        data: Array.isArray(raw) ? raw : [],
+        lastAttemptAt: markerCache.lastAttemptAt,
+        lastError: null,
+      };
+      return markerCache.data;
+    } catch (error) {
+      markerCache.lastError = error instanceof Error ? error.message : String(error);
+      if (markerCache.data.length) return markerCache.data;
+      throw error;
+    } finally {
+      markerRefresh = null;
+    }
+  })();
+  return markerRefresh;
+}
+
+async function projectSchedules() {
+  if (!authClient) return scheduleCache.data;
+  if (Date.now() - scheduleCache.at < SCHEDULE_CACHE_TTL_MS && scheduleCache.data.size) return scheduleCache.data;
+  if (scheduleRefresh) return scheduleRefresh;
+  scheduleRefresh = (async () => {
+    scheduleCache.lastAttemptAt = Date.now();
+    try {
+      const rows = [];
+      const pageSize = 1000;
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await authClient
+          .from('ccs_project_schedule')
+          .select('project_id,site_start_date,site_end_date,site_closed,is_active')
+          .eq('is_active', true)
+          .range(from, from + pageSize - 1);
+        if (error) throw error;
+        rows.push(...(data || []));
+        if (!data || data.length < pageSize) break;
+      }
+      scheduleCache = {
+        at: Date.now(),
+        data: new Map(rows.map(row => [String(row.project_id), row])),
+        lastAttemptAt: scheduleCache.lastAttemptAt,
+        lastError: null,
+      };
+      return scheduleCache.data;
+    } catch (error) {
+      scheduleCache.lastError = error instanceof Error ? error.message : String(error);
+      if (scheduleCache.data.size) return scheduleCache.data;
+      return new Map();
+    } finally {
+      scheduleRefresh = null;
+    }
+  })();
+  return scheduleRefresh;
+}
+
+function withinDateRange(value, from, to) {
+  if (!from && !to) return true;
+  if (!value) return false;
+  const date = String(value).slice(0, 10);
+  return (!from || date >= from) && (!to || date <= to);
+}
+
+async function enrichedMarkers() {
+  const [all, schedules] = await Promise.all([markers(), projectSchedules()]);
+  return all.map(project => {
+    const schedule = schedules.get(String(project.Id));
+    return schedule ? {
+      ...project,
+      SiteStartDate: schedule.site_start_date,
+      SiteEndDate: schedule.site_end_date,
+      SiteClosed: schedule.site_closed,
+    } : project;
+  });
 }
 
 app.get('/api/projects', requireSiteFinderAuth, async (req, res) => {
   try {
     const q = String(req.query.q || '').toLowerCase();
     const region = String(req.query.region || 'target');
-    const all = await markers();
+    const completionFrom = String(req.query.completion_from || '').slice(0, 10);
+    const completionTo = String(req.query.completion_to || '').slice(0, 10);
+    const all = await enrichedMarkers();
     const filtered = all.filter(x => {
       const haystack = [x.Name, x.Client, x.MainContractor, x.LaId].join(' ');
-      return (region === 'all' || isTargetProject(x)) && (!q || haystack.toLowerCase().includes(q));
+      return (region === 'all' || isTargetProject(x))
+        && (!q || haystack.toLowerCase().includes(q))
+        && withinDateRange(x.SiteEndDate, completionFrom, completionTo);
     });
     res.set('Cache-Control', 'private, max-age=300');
     res.json({ source: MARKERS, updatedAt: new Date(markerCache.at).toISOString(), total: filtered.length, projects: filtered });
@@ -129,6 +220,24 @@ app.get('/api/projects/:id', requireSiteFinderAuth, async (req, res) => {
     res.set('Cache-Control', 'private, no-store');
     res.json({ ...(await response.json()), SourceUrl: sourceUrl });
   } catch (error) { res.status(502).json({ error: error.message }); }
+});
+
+function protectedResourceMetadata() {
+  return {
+    resource: `${siteFinderOrigin}/mcp`,
+    authorization_servers: oauthIssuer ? [oauthIssuer] : [],
+    bearer_methods_supported: ['header'],
+    scopes_supported: ['email', 'profile'],
+    resource_documentation: `${siteFinderOrigin}/`,
+  };
+}
+
+app.get([
+  '/.well-known/oauth-protected-resource',
+  '/.well-known/oauth-protected-resource/mcp',
+], (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.json(protectedResourceMetadata());
 });
 
 app.all('/mcp', validateMcpOrigin, requireSiteFinderAuth, async (req, res) => {
@@ -169,9 +278,28 @@ app.use('/api', requireSiteFinderAuth, (_req, res) => {
   res.status(404).json({ error: 'API route not found' });
 });
 
-app.get('/health', (_req, res) => res.json({ ok: true, markerCacheAt: markerCache.at || null }));
+app.get('/health', (_req, res) => {
+  const markerAgeMs = markerCache.at ? Date.now() - markerCache.at : null;
+  res.json({
+    ok: Boolean(markerCache.data.length) || !markerCache.lastError,
+    markerCacheStatus: markerCache.data.length
+      ? (markerAgeMs > CACHE_TTL_MS ? 'stale' : 'ready')
+      : (markerCache.lastError ? 'error' : 'warming'),
+    markerCacheAt: markerCache.at || null,
+    markerCacheProjects: markerCache.data.length,
+    markerCacheLastAttemptAt: markerCache.lastAttemptAt || null,
+    markerCacheLastError: markerCache.lastError,
+    scheduleCacheAt: scheduleCache.at || null,
+    scheduleCacheProjects: scheduleCache.data.size,
+    scheduleCacheLastError: scheduleCache.lastError,
+  });
+});
 const root = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.static(path.join(root, 'dist')));
 app.use((req, res, next) => req.method === 'GET' ? res.sendFile(path.join(root, 'dist', 'index.html')) : next());
 setInterval(() => markers().catch(error => console.error('CCS refresh failed:', error.message)), 30 * 60_000).unref();
-app.listen(PORT, '0.0.0.0', () => console.log(`GSD SiteFinder listening on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`GSD SiteFinder listening on port ${PORT}`);
+  Promise.all([markers(), projectSchedules()])
+    .catch(error => console.error('SiteFinder cache warm failed:', error.message));
+});

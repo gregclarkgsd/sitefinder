@@ -18,7 +18,7 @@ const statusLabel = status => ({
   suppressed: 'Do not contact',
 }[status] || status);
 
-export function OutreachPage({ leads, communications, suppressions, updateLead }) {
+export function OutreachPage({ leads, communications, suppressions, updateLead, syncToAttio }) {
   const [view,setView] = useState('review');
   const [selectedIds,setSelectedIds] = useState(()=>new Set());
   const [editing,setEditing] = useState(null);
@@ -41,13 +41,17 @@ export function OutreachPage({ leads, communications, suppressions, updateLead }
   });
 
   const approveSelected = async () => {
-    const selected = leads.filter(lead=>selectedIds.has(lead.id));
+    const selected = leads.filter(lead=>selectedIds.has(lead.id)
+      && lead.recipient_email
+      && !suppressionEmails.has(lead.recipient_email.toLowerCase()));
     if (!selected.length) return;
     setSaving(true);
-    await Promise.all(selected.map(lead=>updateLead(lead,{
-      status:'approved',
-      approved_at:new Date().toISOString(),
-    })));
+    for (const lead of selected) {
+      await updateLead(lead,{
+        status:'approved',
+        approved_at:new Date().toISOString(),
+      });
+    }
     setSelectedIds(new Set());
     setSaving(false);
   };
@@ -88,12 +92,12 @@ export function OutreachPage({ leads, communications, suppressions, updateLead }
             const suppressed = lead.recipient_email&&suppressionEmails.has(lead.recipient_email.toLowerCase());
             return <article className="outreach-row" key={lead.id}>
               <div className="lead-cell">
-                {view==='review'&&<input type="checkbox" checked={selectedIds.has(lead.id)} onChange={()=>toggle(lead.id)} aria-label={`Select ${lead.project_name}`}/>}
+                {view==='review'&&<input type="checkbox" disabled={!lead.recipient_email||suppressed} checked={selectedIds.has(lead.id)} onChange={()=>toggle(lead.id)} aria-label={`Select ${lead.project_name}`}/>}
                 <div><strong>{lead.project_name}</strong><small>CCS {lead.project_id.replace('site','')}</small></div>
               </div>
               <div><strong>{lead.recipient_name||'Site contact'}</strong><small>{lead.recipient_email||'No email published'}</small></div>
               <div>{lead.company_name||'Not published'}</div>
-              <div><span className={`outreach-status status-${suppressed?'suppressed':lead.status}`}>{suppressed?'Do not contact':statusLabel(lead.status)}</span></div>
+              <div><span className={`outreach-status status-${suppressed?'suppressed':lead.status}`}>{suppressed?'Do not contact':statusLabel(lead.status)}</span>{lead.status==='approved'&&<small>{lead.attio_record_id?'CRM synced':lead.attio_sync_error?'CRM error':'CRM pending'}</small>}</div>
               <div>{formatDate(lead.created_at)}</div>
               <div><button className="review-lead" onClick={()=>setEditing(lead)}>{view==='history'?'View':'Review'}</button></div>
             </article>;
@@ -106,11 +110,11 @@ export function OutreachPage({ leads, communications, suppressions, updateLead }
       <div><strong>Sending remains locked until Sam’s mailbox is connected.</strong><p>Approved messages stay in SiteFinder and cannot be sent accidentally. Suppressed addresses are clearly blocked.</p></div>
     </div>
 
-    {editing&&<OutreachComposer lead={editing} suppressed={Boolean(editing.recipient_email&&suppressionEmails.has(editing.recipient_email.toLowerCase()))} communications={communications.filter(item=>item.project_id===editing.project_id)} close={()=>setEditing(null)} save={async changes=>{setSaving(true);const ok=await updateLead(editing,changes);setSaving(false);if(ok)setEditing(null)}} saving={saving}/>}
+    {editing&&<OutreachComposer lead={editing} suppressed={Boolean(editing.recipient_email&&suppressionEmails.has(editing.recipient_email.toLowerCase()))} communications={communications.filter(item=>item.project_id===editing.project_id)} close={()=>setEditing(null)} save={async changes=>{setSaving(true);const ok=await updateLead(editing,changes);setSaving(false);if(ok)setEditing(null)}} syncToAttio={syncToAttio} saving={saving}/>}
   </section>;
 }
 
-function OutreachComposer({lead,suppressed,communications,close,save,saving}) {
+function OutreachComposer({lead,suppressed,communications,close,save,syncToAttio,saving}) {
   const [subject,setSubject] = useState(lead.email_subject||'');
   const [body,setBody] = useState(lead.email_body||'');
   const readonly = ['sent','replied','bounced','suppressed'].includes(lead.status);
@@ -126,6 +130,7 @@ function OutreachComposer({lead,suppressed,communications,close,save,saving}) {
       <label>Message<textarea rows="12" value={body} onChange={event=>setBody(event.target.value)} readOnly={readonly}/></label>
       {suppressed&&<div className="suppressed-warning"><ShieldX size={17}/><strong>This address is on the do-not-contact list and cannot be approved.</strong></div>}
       <div className="composer-history"><h3>Communication history</h3><CommunicationTimeline communications={communications}/></div>
+      {lead.status==='approved'&&<div className="crm-state"><strong>{lead.attio_record_id?'Synced to Attio':lead.attio_sync_error?'Attio sync needs attention':'Waiting to sync to Attio'}</strong>{lead.attio_sync_error&&<small>{lead.attio_sync_error}</small>}{!lead.attio_record_id&&<button type="button" disabled={saving} onClick={()=>syncToAttio(lead)}>Retry Attio sync</button>}</div>}
       {!readonly&&<footer>
         <button className="skip" disabled={saving} onClick={()=>save({status:'skipped',skipped_at:new Date().toISOString(),email_subject:subject,email_body:body})}><SkipForward size={15}/> Skip</button>
         <button disabled={saving} onClick={()=>save({status:'reviewing',email_subject:subject,email_body:body})}>Save draft</button>

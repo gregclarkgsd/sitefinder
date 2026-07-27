@@ -19,6 +19,12 @@ const errorResult = error => ({
 const clean = value => String(value || '').trim();
 const lower = value => clean(value).toLowerCase();
 const siteNumber = value => clean(value).replace(/^site/i, '');
+const inDateRange = (value, from, to) => {
+  if (!from && !to) return true;
+  if (!value) return false;
+  const date = String(value).slice(0, 10);
+  return (!from || date >= from) && (!to || date <= to);
+};
 
 function publicProject(project) {
   return {
@@ -29,6 +35,9 @@ function publicProject(project) {
     client_id: clean(project.ClientId),
     client: clean(project.Client),
     local_authority: clean(project.LaId),
+    start_date: project.SiteStartDate || null,
+    completion_date: project.SiteEndDate || null,
+    site_closed: project.SiteClosed ?? null,
     latitude: Number.isFinite(Number(project.Latitude)) ? Number(project.Latitude) : null,
     longitude: Number.isFinite(Number(project.Longitude)) ? Number(project.Longitude) : null,
   };
@@ -78,6 +87,10 @@ export function createSiteFinderMcpServer(options = {}) {
       contractor: z.string().trim().max(200).optional().describe('Exact or partial main-contractor name'),
       client: z.string().trim().max(200).optional().describe('Exact or partial client name'),
       location: z.string().trim().max(200).optional().describe('Exact or partial local-authority/location name'),
+      start_from: z.string().date().optional().describe('Only projects starting on or after this ISO date (YYYY-MM-DD)'),
+      start_to: z.string().date().optional().describe('Only projects starting on or before this ISO date (YYYY-MM-DD)'),
+      completion_from: z.string().date().optional().describe('Only projects completing on or after this ISO date (YYYY-MM-DD)'),
+      completion_to: z.string().date().optional().describe('Only projects completing on or before this ISO date (YYYY-MM-DD)'),
       limit: z.number().int().min(1).max(100).default(25).describe('Maximum projects to return'),
       offset: z.number().int().min(0).max(10_000).default(0).describe('Number of matching projects to skip'),
     },
@@ -87,7 +100,18 @@ export function createSiteFinderMcpServer(options = {}) {
       idempotentHint: true,
       openWorldHint: true,
     },
-  }, async ({ query, contractor, client: clientFilter, location, limit, offset }) => {
+  }, async ({
+    query,
+    contractor,
+    client: clientFilter,
+    location,
+    start_from: startFrom,
+    start_to: startTo,
+    completion_from: completionFrom,
+    completion_to: completionTo,
+    limit,
+    offset,
+  }) => {
     try {
       const feed = await client.listProjects();
       const matches = (feed.projects || []).filter(project => {
@@ -95,7 +119,9 @@ export function createSiteFinderMcpServer(options = {}) {
         return (!query || haystack.includes(lower(query)))
           && (!contractor || lower(project.MainContractor).includes(lower(contractor)))
           && (!clientFilter || lower(project.Client).includes(lower(clientFilter)))
-          && (!location || lower(project.LaId).includes(lower(location)));
+          && (!location || lower(project.LaId).includes(lower(location)))
+          && inDateRange(project.SiteStartDate, startFrom, startTo)
+          && inDateRange(project.SiteEndDate, completionFrom, completionTo);
       });
       return textResult({
         source: feed.source,
@@ -227,7 +253,8 @@ export function createSiteFinderMcpServer(options = {}) {
     },
   }, async () => {
     try {
-      const [health, feed] = await Promise.all([client.health(), client.listProjects()]);
+      const feed = await client.listProjects();
+      const health = await client.health();
       return textResult({
         ok: Boolean(health.ok),
         sitefinder_url: client.origin,

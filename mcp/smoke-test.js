@@ -12,7 +12,7 @@ const transport = new StdioClientTransport({
   cwd: root,
   env: {
     ...process.env,
-    SITEFINDER_URL: process.env.SITEFINDER_URL || 'https://gsd-sitefinder.onrender.com',
+    SITEFINDER_URL: process.env.SITEFINDER_URL || 'http://127.0.0.1:8787',
   },
   stderr: 'pipe',
 });
@@ -25,6 +25,16 @@ try {
   const search = await client.callTool({
     name: 'search_projects',
     arguments: { query: '22 Hill Street', limit: 5 },
+  });
+  const from = new Date();
+  from.setMonth(from.getMonth() + 3);
+  const to = new Date();
+  to.setMonth(to.getMonth() + 9);
+  const completionFrom = from.toISOString().slice(0, 10);
+  const completionTo = to.toISOString().slice(0, 10);
+  const completionWindow = await client.callTool({
+    name: 'search_projects',
+    arguments: { completion_from: completionFrom, completion_to: completionTo, limit: 5 },
   });
   const detail = await client.callTool({
     name: 'get_project',
@@ -41,6 +51,7 @@ try {
 
   const statusData = JSON.parse(status.content[0].text);
   const searchData = JSON.parse(search.content[0].text);
+  const completionWindowData = JSON.parse(completionWindow.content[0].text);
   const detailData = JSON.parse(detail.content[0].text);
   const contractorData = JSON.parse(contractors.content[0].text);
   const locationData = JSON.parse(locations.content[0].text);
@@ -55,6 +66,13 @@ try {
   }
   if (!searchData.projects.some(project => project.site_id === '518253')) {
     throw new Error('Project search did not return CCS 518253');
+  }
+  if (!completionWindowData.projects.length || completionWindowData.projects.some(project => (
+    !project.completion_date
+    || project.completion_date < completionFrom
+    || project.completion_date > completionTo
+  ))) {
+    throw new Error('Completion-window search returned an out-of-range project');
   }
   if (detailData.site_id !== '518253' || !detailData.source_url) {
     throw new Error('Project detail did not return the verified CCS source');
@@ -71,6 +89,7 @@ try {
     tools: actualTools,
     active_projects: statusData.active_projects,
     search_matches: searchData.total_matches,
+    completion_window_matches: completionWindowData.total_matches,
     verified_project: detailData.project_name,
   }, null, 2));
 } finally {
