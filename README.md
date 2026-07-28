@@ -150,11 +150,12 @@ call a privileged database function or update a research record directly.
 
 The server-only `POST /api/research/ingest` endpoint accepts the narrow,
 validated progress contract used by the enrichment worker. It requires both
-server-only settings below and fails closed when either is absent:
+the Supabase server credential and a Research Agent credential. The Research
+Agent credential can be supplied as the raw token or as its SHA-256 hash:
 
 ```text
 SUPABASE_SECRET_KEY
-RESEARCH_AGENT_INGEST_TOKEN
+RESEARCH_AGENT_INGEST_TOKEN or RESEARCH_AGENT_INGEST_TOKEN_SHA256
 ```
 
 The ingestion route accepts only bounded run/task progress, HTTPS source

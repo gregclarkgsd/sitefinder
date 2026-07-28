@@ -1,9 +1,12 @@
 import express from 'express';
 import path from 'node:path';
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createClient } from '@supabase/supabase-js';
+import {
+  researchCredentialMatches,
+  tokenHashMatches,
+} from './credential-utils.js';
 import { createSiteFinderClient, createSiteFinderMcpServer } from './mcp/sitefinder-mcp.js';
 import {
   applyResearchIngestMessage,
@@ -31,6 +34,7 @@ const supabaseUrl = process.env.VITE_SUPABASE_URL;
 const supabaseKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
 const researchIngestToken = process.env.RESEARCH_AGENT_INGEST_TOKEN;
+const researchIngestTokenHash = process.env.RESEARCH_AGENT_INGEST_TOKEN_SHA256;
 const siteFinderOrigin = String(process.env.SITEFINDER_URL || 'https://gsd-sitefinder.onrender.com').replace(/\/+$/, '');
 const oauthIssuer = supabaseUrl ? `${supabaseUrl.replace(/\/+$/, '')}/auth/v1` : null;
 const mcpTokenHash = process.env.SITEFINDER_MCP_TOKEN_SHA256
@@ -56,28 +60,15 @@ function bearerToken(req) {
   return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
 }
 
-function secretsMatch(left, right) {
-  if (!left || !right) return false;
-  const leftBytes = Buffer.from(left);
-  const rightBytes = Buffer.from(right);
-  return leftBytes.length === rightBytes.length
-    && timingSafeEqual(leftBytes, rightBytes);
-}
-
-function tokenHashMatches(candidate, expectedHash) {
-  if (!candidate || !expectedHash) return false;
-  const left = Buffer.from(createHash('sha256').update(String(candidate)).digest('hex'));
-  const right = Buffer.from(String(expectedHash));
-  return left.length === right.length
-    && left.length > 0
-    && timingSafeEqual(left, right);
-}
-
 function requireResearchIngestAuth(req, res, next) {
-  if (!researchAdminClient || !researchIngestToken) {
+  if (!researchAdminClient || (!researchIngestToken && !researchIngestTokenHash)) {
     return res.status(503).json({ error: 'Research ingestion is not configured' });
   }
-  if (!secretsMatch(bearerToken(req), researchIngestToken)) {
+  if (!researchCredentialMatches(
+    bearerToken(req),
+    researchIngestToken,
+    researchIngestTokenHash,
+  )) {
     return res.status(401).json({ error: 'Invalid research ingestion credential' });
   }
   return next();
