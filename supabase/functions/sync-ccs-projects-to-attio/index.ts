@@ -798,6 +798,7 @@ async function upsertProjectRecord(
   contractor: LinkRow | null,
   client: LinkRow | null,
   person: LinkRow | null,
+  mappedRecordId: string | null,
 ) {
   const values: Record<string, unknown> = {};
   put(values, attributes, ['name', 'project'], project.project_name);
@@ -895,11 +896,14 @@ async function upsertProjectRecord(
   const idAttribute = findAttribute(attributes, ['ccs_site_id', 'ccs id', 'ccs number']);
   if (!idAttribute) throw new Error('Projects object has no CCS Site ID attribute');
   await ensureSelectValues(attio, object, attributes, values);
-  const existing = await findProjectRecord(attio, object, idAttribute, project.project_id);
+  const discovered = mappedRecordId
+    ? null
+    : await findProjectRecord(attio, object, idAttribute, project.project_id);
+  const existingRecordId = mappedRecordId || discovered?.id.record_id || null;
 
   try {
-    return existing
-      ? await attio.replaceRecordValues(object, existing.id.record_id, values)
+    return existingRecordId
+      ? await attio.replaceRecordValues(object, existingRecordId, values)
       : await attio.createRecord(object, optionalValues(values));
   } catch (error) {
     const stageAttribute = findAttribute(attributes, ['stage']);
@@ -908,8 +912,8 @@ async function upsertProjectRecord(
     }
     const withoutStage = { ...values };
     delete withoutStage[stageAttribute.api_slug];
-    return existing
-      ? await attio.replaceRecordValues(object, existing.id.record_id, withoutStage)
+    return existingRecordId
+      ? await attio.replaceRecordValues(object, existingRecordId, withoutStage)
       : await attio.createRecord(object, optionalValues(withoutStage));
   }
 }
@@ -923,6 +927,7 @@ async function syncProject(
 ) {
   const enrichment = deriveEnrichment(project);
   const detail = project.detail_data || {};
+  const projectLink = await findLink(db, 'project', project.project_id);
   const contractor = await resolveCompany(
     db,
     attio,
@@ -983,6 +988,7 @@ async function syncProject(
     contractor,
     client,
     person,
+    projectLink?.attio_record_id || null,
   );
   await saveLink(db, {
     entityType: 'project',

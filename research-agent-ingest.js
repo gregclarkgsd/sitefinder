@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {z} from 'zod';
 
 const uuid = z.uuid();
@@ -99,7 +100,45 @@ const messageSchema = z.discriminatedUnion('type', [
   eventAppend,
   candidateUpsert,
   runStatus,
-]);
+]).superRefine((message, context) => {
+  if (
+    message.type === 'task.upsert'
+    && message.task.id !== stableResearchTaskId(message.task.runId, message.task.companyId)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Task identifier must match its run and company',
+      path: ['task', 'id'],
+    });
+  }
+});
+
+const allowedWorkerStatusSources = {
+  queued: ['queued'],
+  running: ['queued', 'running'],
+  paused: ['queued', 'running', 'paused'],
+  stopping: ['queued', 'running', 'paused', 'stopping'],
+  completed: ['queued', 'running'],
+  failed: ['queued', 'running', 'paused', 'stopping'],
+  cancelled: ['queued', 'running', 'paused', 'stopping', 'cancelled'],
+};
+
+export function stableResearchTaskId(runId, companyId) {
+  const bytes = createHash('sha256')
+    .update([runId, companyId, 'task'].join('\u0000'))
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join('-');
+}
 
 export function parseResearchIngestMessage(value) {
   return messageSchema.parse(value);
@@ -204,7 +243,9 @@ export async function applyResearchIngestMessage(client, rawMessage) {
       failure_message: run.failureMessage || null,
       completed_at: run.completedAt || null,
       updated_at: now,
-    }).eq('id', run.id);
+    })
+      .eq('id', run.id)
+      .in('status', allowedWorkerStatusSources[run.status]);
   }
 
   const {error} = await operation;

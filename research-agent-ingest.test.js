@@ -4,6 +4,7 @@ import {
   applyResearchIngestMessage,
   parseResearchIngestMessage,
   parseResearchRunId,
+  stableResearchTaskId,
 } from './research-agent-ingest.js';
 
 const runId = '11111111-1111-4111-8111-111111111111';
@@ -73,6 +74,34 @@ test('accepts only a valid UUID for research control lookups', () => {
   assert.throws(() => parseResearchRunId('../research_runs'));
 });
 
+test('requires the deterministic task identifier used by the worker', () => {
+  const companyId = 'company-1';
+  const expectedTaskId = stableResearchTaskId(runId, companyId);
+  const message = parseResearchIngestMessage({
+    type: 'task.upsert',
+    task: {
+      id: expectedTaskId,
+      runId,
+      companyId,
+      companyName: 'Example Construction',
+      domain: 'example.com',
+      status: 'waiting',
+    },
+  });
+  assert.equal(message.task.id, expectedTaskId);
+  assert.throws(() => parseResearchIngestMessage({
+    type: 'task.upsert',
+    task: {
+      id: taskId,
+      runId,
+      companyId,
+      companyName: 'Example Construction',
+      domain: 'example.com',
+      status: 'waiting',
+    },
+  }), /Task identifier must match/u);
+});
+
 test('records machine progress without impersonating a human actor', async () => {
   let savedRow;
   const client = {
@@ -102,4 +131,43 @@ test('records machine progress without impersonating a human actor', async () =>
   assert.equal(savedRow.mode, 'read_only');
   assert.equal(savedRow.created_by, undefined);
   assert.equal(savedRow.updated_by, undefined);
+});
+
+test('worker heartbeats cannot undo a human pause or stop request', async () => {
+  let allowedStatuses;
+  const client = {
+    from(table) {
+      assert.equal(table, 'research_runs');
+      return {
+        update() {
+          return {
+            eq() {
+              return {
+                in(column, values) {
+                  assert.equal(column, 'status');
+                  allowedStatuses = values;
+                  return Promise.resolve({error: null});
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+
+  await applyResearchIngestMessage(client, {
+    type: 'run.status',
+    run: {
+      id: runId,
+      status: 'running',
+      companiesChecked: 1,
+      pagesInspected: 3,
+      peopleFound: 1,
+    },
+  });
+
+  assert.deepEqual(allowedStatuses, ['queued', 'running']);
+  assert.equal(allowedStatuses.includes('paused'), false);
+  assert.equal(allowedStatuses.includes('stopping'), false);
 });

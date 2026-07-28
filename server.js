@@ -1,6 +1,6 @@
 import express from 'express';
 import path from 'node:path';
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createClient } from '@supabase/supabase-js';
@@ -33,6 +33,8 @@ const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
 const researchIngestToken = process.env.RESEARCH_AGENT_INGEST_TOKEN;
 const siteFinderOrigin = String(process.env.SITEFINDER_URL || 'https://gsd-sitefinder.onrender.com').replace(/\/+$/, '');
 const oauthIssuer = supabaseUrl ? `${supabaseUrl.replace(/\/+$/, '')}/auth/v1` : null;
+const mcpTokenHash = process.env.SITEFINDER_MCP_TOKEN_SHA256
+  || 'a536da901c6ba6c3cf18a33b049a1c274013d5574dd0349a70fe47a0cdc36954';
 const authClient = supabaseUrl && supabaseKey
   ? createClient(supabaseUrl, supabaseKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
@@ -60,6 +62,15 @@ function secretsMatch(left, right) {
   const rightBytes = Buffer.from(right);
   return leftBytes.length === rightBytes.length
     && timingSafeEqual(leftBytes, rightBytes);
+}
+
+function tokenHashMatches(candidate, expectedHash) {
+  if (!candidate || !expectedHash) return false;
+  const left = Buffer.from(createHash('sha256').update(String(candidate)).digest('hex'));
+  const right = Buffer.from(String(expectedHash));
+  return left.length === right.length
+    && left.length > 0
+    && timingSafeEqual(left, right);
 }
 
 function requireResearchIngestAuth(req, res, next) {
@@ -91,6 +102,12 @@ async function requireSiteFinderAuth(req, res, next) {
   }
 
   const token = bearerToken(req);
+  if (tokenHashMatches(token, mcpTokenHash)) {
+    req.siteFinderAuth = { type: 'mcp', email: 'sitefinder-mcp' };
+    req.siteFinderToken = token;
+    return next();
+  }
+
   if (!token || !authClient) {
     setAuthChallenge(res);
     return res.status(401).json({ error: 'Authentication required' });
