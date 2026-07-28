@@ -137,6 +137,13 @@ The production connection must preserve the same boundary:
 - approval may queue a candidate for a separately governed Attio write, but
   never sends email and never writes to Attio from the preview interface.
 
+Migration `20260728185448_add_research_agent_control_room.sql` provides the
+saved read-only run, task, event and candidate-review records. All four tables
+use row-level security for authenticated `@gsdecorating.com` users and publish
+authorised changes through Supabase Realtime. When a saved run exists, the
+control room loads it automatically; otherwise it remains visibly in preview
+mode.
+
 ## Project intelligence and Attio links
 
 SiteFinder's richer project listing is built only from data GSD already holds:

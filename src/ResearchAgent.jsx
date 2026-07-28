@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {
   Bot,
   Check,
@@ -24,6 +24,13 @@ import {
   reviewCandidate,
   setRunStatus,
 } from './researchAgentState';
+import {
+  loadLatestResearchRun,
+  subscribeToResearchRun,
+  updateResearchCandidateReview,
+  updateResearchRunStatus,
+} from './researchAgentData';
+import {supabase} from './supabase';
 import './research-agent.css';
 
 const taskStatus = {
@@ -32,6 +39,20 @@ const taskStatus = {
   waiting: 'Waiting',
   completed: 'Completed',
   failed: 'Needs attention',
+  skipped: 'Skipped',
+};
+const emptyTask = {
+  id: 'no-research-task',
+  companyName: 'No company selected',
+  domain: '',
+  status: 'waiting',
+  progress: 0,
+  pageCount: 0,
+  contactsFound: 0,
+  pageTitle: 'Waiting for the research runner',
+  currentUrl: '',
+  currentRole: 'Relevant construction role',
+  currentStep: 0,
 };
 
 function runStatusLabel(status) {
@@ -40,10 +61,14 @@ function runStatusLabel(status) {
     paused: 'Research paused',
     stopping: 'Stopping after current company',
     completed: 'Research completed',
+    queued: 'Research queued',
+    failed: 'Research needs attention',
+    cancelled: 'Research cancelled',
   }[status] || 'Research status unknown';
 }
 
 function formatTime(value) {
+  if (!value) return '—';
   return new Intl.DateTimeFormat('en-GB', {hour: '2-digit', minute: '2-digit'}).format(new Date(value));
 }
 
@@ -70,8 +95,16 @@ function CompanyQueue({tasks, selectedTaskId, onSelect}) {
   </section>;
 }
 
-function BrowserPreview({task, runStatus}) {
-  const visibleSteps = researchEventSteps.slice(0, Math.max(1, task.currentStep + 1));
+function BrowserPreview({task, runStatus, events = []}) {
+  const liveEvents = events.filter(event => event.taskId === task.id).slice(-6);
+  const previewEvents = researchEventSteps
+    .slice(0, Math.max(1, (task.currentStep || 0) + 1))
+    .map((message, index, rows) => ({
+      id: message,
+      message,
+      createdAt: Date.now() - (rows.length - index) * 7000,
+    }));
+  const visibleEvents = liveEvents.length ? liveEvents : previewEvents;
   return <section className="research-pane research-live" aria-label="Live research activity">
     <div className="research-pane-heading">
       <div><span>Current task</span><h2>Live research view</h2></div>
@@ -80,7 +113,9 @@ function BrowserPreview({task, runStatus}) {
     <div className="research-browser">
       <div className="research-browser-bar">
         <span className="browser-dots" aria-hidden="true"><i/><i/><i/></span>
-        <a href={task.currentUrl} target="_blank" rel="noreferrer">{task.currentUrl}<ExternalLink size={12}/></a>
+        {task.currentUrl
+          ? <a href={task.currentUrl} target="_blank" rel="noreferrer">{task.currentUrl}<ExternalLink size={12}/></a>
+          : <span className="research-address-empty">No public page open</span>}
       </div>
       <div className="research-page-preview">
         <div className="research-page-brand">
@@ -96,10 +131,10 @@ function BrowserPreview({task, runStatus}) {
       </div>
     </div>
     <div className="research-events" aria-live="polite">
-      {visibleSteps.map((event, index) => <div className={`research-event ${index === visibleSteps.length - 1 ? 'current' : ''}`} key={event}>
-        <span>{formatTime(Date.now() - (visibleSteps.length - index) * 7000)}</span>
+      {visibleEvents.map((event, index) => <div className={`research-event ${index === visibleEvents.length - 1 ? 'current' : ''}`} key={event.id}>
+        <span>{formatTime(event.createdAt)}</span>
         <i/>
-        <p>{runStatus === 'paused' && index === visibleSteps.length - 1 ? 'Paused safely. The current task and page position are saved.' : event}</p>
+        <p>{runStatus === 'paused' && index === visibleEvents.length - 1 ? 'Paused safely. The current task and page position are saved.' : event.message}</p>
       </div>)}
     </div>
   </section>;
@@ -139,12 +174,45 @@ function CandidateInspector({candidate, companyName, onReview}) {
   </section>;
 }
 
-export function ResearchAgentPage() {
+export function ResearchAgentPage({cloudEnabled = false, session = null}) {
   const [run, setRun] = useState(createPreviewResearchRun);
   const [selectedTaskId, setSelectedTaskId] = useState(run.tasks[0].id);
-  const selectedTask = useMemo(() => run.tasks.find(task => task.id === selectedTaskId) || run.tasks[0], [run.tasks, selectedTaskId]);
+  const [dataState, setDataState] = useState('preview');
+  const [dataError, setDataError] = useState('');
+  const [working, setWorking] = useState(false);
+  const selectedTask = useMemo(() => run.tasks.find(task => task.id === selectedTaskId) || run.tasks[0] || emptyTask, [run.tasks, selectedTaskId]);
   const candidate = run.candidates.find(item => item.taskId === selectedTask.id) || null;
   const reviewCount = pendingReviewCount(run);
+
+  const loadSavedRun = useCallback(async () => {
+    if (!cloudEnabled || !supabase) return null;
+    try {
+      const savedRun = await loadLatestResearchRun(supabase);
+      if (!savedRun) {
+        setDataState('preview');
+        setDataError('');
+        return null;
+      }
+      setRun(savedRun);
+      setSelectedTaskId(current => savedRun.tasks.some(task => task.id === current) ? current : savedRun.tasks[0]?.id || '');
+      setDataState('live');
+      setDataError('');
+      return savedRun;
+    } catch (error) {
+      setDataState('preview');
+      setDataError(error instanceof Error ? error.message : 'Saved research runs are unavailable.');
+      return null;
+    }
+  }, [cloudEnabled]);
+
+  useEffect(() => {
+    loadSavedRun();
+  }, [loadSavedRun]);
+
+  useEffect(() => {
+    if (dataState !== 'live' || !supabase || !run.id) return undefined;
+    return subscribeToResearchRun(supabase, run.id, loadSavedRun);
+  }, [dataState, loadSavedRun, run.id]);
 
   useEffect(() => {
     if (run.mode !== 'preview' || run.status !== 'running') return undefined;
@@ -152,15 +220,57 @@ export function ResearchAgentPage() {
     return () => window.clearInterval(timer);
   }, [run.mode, run.status]);
 
-  const togglePause = () => setRun(current => setRunStatus(current, current.status === 'paused' ? 'running' : 'paused'));
+  const changeRunStatus = async status => {
+    if (dataState !== 'live') {
+      setRun(current => setRunStatus(current, status));
+      return;
+    }
+    if (!session?.user?.id || !supabase) return;
+    setWorking(true);
+    try {
+      await updateResearchRunStatus(supabase, run.id, status, session.user.id);
+      setRun(current => ({...current, status}));
+      setDataError('');
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'The run status could not be updated.');
+    } finally {
+      setWorking(false);
+    }
+  };
+  const togglePause = () => changeRunStatus(run.status === 'paused' ? 'running' : 'paused');
+  const stopAfterCurrent = async () => {
+    if (dataState !== 'live') {
+      setRun(current => requestStopAfterCurrent(current));
+      return;
+    }
+    await changeRunStatus('stopping');
+  };
   const reset = () => {
+    if (dataState === 'live') {
+      loadSavedRun();
+      return;
+    }
     const next = createPreviewResearchRun();
     setRun(next);
     setSelectedTaskId(next.tasks[0].id);
   };
-  const decide = decision => {
+  const decide = async decision => {
     if (!candidate) return;
-    setRun(current => reviewCandidate(current, candidate.id, decision));
+    if (dataState !== 'live') {
+      setRun(current => reviewCandidate(current, candidate.id, decision));
+      return;
+    }
+    if (!session?.user?.id || !supabase) return;
+    setWorking(true);
+    try {
+      await updateResearchCandidateReview(supabase, candidate.id, decision, session.user.id);
+      setRun(current => reviewCandidate(current, candidate.id, decision));
+      setDataError('');
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'The candidate decision could not be saved.');
+    } finally {
+      setWorking(false);
+    }
   };
 
   return <div className="research-agent-page">
@@ -168,19 +278,19 @@ export function ResearchAgentPage() {
       <div className="research-run-title">
         <span className={`research-live-dot status-${run.status}`}/>
         <div>
-          <div><strong>{runStatusLabel(run.status)} · {run.name}</strong><span className="preview-label">Preview mode</span></div>
+          <div><strong>{runStatusLabel(run.status)} · {run.name}</strong><span className={`preview-label ${dataState === 'live' ? 'live' : ''}`}>{dataState === 'live' ? 'Live read-only' : 'Preview mode'}</span></div>
           <p>Started {formatTime(run.startedAt)} · stops after {run.companyLimit} companies · no automatic Attio changes</p>
         </div>
       </div>
       <div className="research-command-actions">
-        <button type="button" onClick={togglePause} disabled={run.status === 'stopping' || run.status === 'completed'}>
+        <button type="button" onClick={togglePause} disabled={working || run.status === 'stopping' || run.status === 'completed'}>
           {run.status === 'paused' ? <Play size={15}/> : <Pause size={15}/>}
           {run.status === 'paused' ? 'Resume' : 'Pause'}
         </button>
-        <button type="button" onClick={() => setRun(current => requestStopAfterCurrent(current))} disabled={run.stopAfterCurrent || run.status === 'completed'}>
-          <CircleStop size={15}/> {run.stopAfterCurrent ? 'Stop requested' : 'Stop after current company'}
+        <button type="button" onClick={stopAfterCurrent} disabled={working || run.stopAfterCurrent || run.status === 'stopping' || run.status === 'completed'}>
+          <CircleStop size={15}/> {run.stopAfterCurrent || run.status === 'stopping' ? 'Stop requested' : 'Stop after current company'}
         </button>
-        <button type="button" className="primary" onClick={reset}><RotateCcw size={15}/> New preview run</button>
+        <button type="button" className="primary" onClick={reset} disabled={working}><RotateCcw size={15}/> {dataState === 'live' ? 'Refresh run' : 'New preview run'}</button>
       </div>
     </section>
 
@@ -193,9 +303,9 @@ export function ResearchAgentPage() {
 
     <div className="research-workspace">
       <CompanyQueue tasks={run.tasks} selectedTaskId={selectedTask.id} onSelect={setSelectedTaskId}/>
-      <BrowserPreview task={selectedTask} runStatus={run.status}/>
+      <BrowserPreview task={selectedTask} runStatus={run.status} events={run.events}/>
       <CandidateInspector candidate={candidate} companyName={selectedTask.companyName} onReview={decide}/>
     </div>
-    <div className="research-preview-notice"><Bot size={15}/><span>This working page uses illustrative activity while the live research runner is connected. All controls are safely contained in preview mode.</span><button type="button" onClick={reset}><RefreshCw size={14}/> Reset preview</button></div>
+    <div className={`research-preview-notice ${dataState === 'live' ? 'live' : ''}`}><Bot size={15}/><span>{dataState === 'live' ? 'Showing the latest saved read-only run. Task, event and candidate changes update automatically.' : 'This working page uses illustrative activity while the live research runner is connected. All controls are safely contained in preview mode.'}{dataError ? ` Live data note: ${dataError}` : ''}</span><button type="button" onClick={reset}><RefreshCw size={14}/> {dataState === 'live' ? 'Refresh' : 'Reset preview'}</button></div>
   </div>;
 }
