@@ -113,18 +113,6 @@ export class AttioClient {
     return body.data;
   }
 
-  async replaceRecordValues(
-    object: string,
-    recordId: string,
-    values: Record<string, unknown>,
-  ) {
-    const body = await this.request<{ data: AttioRecord }>(
-      `/objects/${encodeURIComponent(object)}/records/${encodeURIComponent(recordId)}`,
-      { method: 'PUT', body: { data: { values } } },
-    );
-    return body.data;
-  }
-
   async assertRecord(object: string, matchingAttribute: string, values: Record<string, unknown>) {
     const body = await this.request<{ data: AttioRecord }>(
       `/objects/${encodeURIComponent(object)}/records?matching_attribute=${encodeURIComponent(matchingAttribute)}`,
