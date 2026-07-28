@@ -61,7 +61,7 @@ create table public.research_tasks (
     or current_url ~ '^https://'
   ),
   page_title text,
-  current_role text,
+  "current_role" text,
   last_error text,
   started_at timestamptz,
   completed_at timestamptz,
