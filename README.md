@@ -121,6 +121,24 @@ detail record with address, dates and published contact fields.
 Project search accepts start and completion date windows. SiteFinder's
 completion filter includes a dedicated 3–9 month decorating window.
 
+## Project intelligence and Attio links
+
+SiteFinder's richer project listing is built only from data GSD already holds:
+the CCS marker and detail records, SiteFinder workflow data, and the canonical
+Attio record URL. Other construction products may be used as interface
+references, but they are not treated as data sources and no third-party feed,
+export, cookies or licence is required.
+
+The CCS project synchronisation derives source-honest programme and sales
+timing from the published start and finish dates. It classifies sector, work
+type, fit-out and new-build housing only when the CCS project name or summary
+contains explicit evidence; otherwise the value remains unknown.
+
+The Attio Project record receives the native project address, postcode, map,
+dates, contractor, client, site contact, CCS metrics, data-completeness score
+and the exact SiteFinder project URL. SiteFinder stores Attio's canonical
+record URL so users can move between the same project in either system.
+
 ## Approved lead handoff to Attio
 
 Only a lead explicitly approved in SiteFinder is asserted into Attio's standard

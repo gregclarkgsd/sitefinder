@@ -8,6 +8,7 @@ import { CommunicationTimeline, OutreachPage } from './Outreach';
 import { apiFetch } from './api';
 import { supabase } from './supabase';
 import { projectIdFromSearch, projectSearchUrl } from './projectLinks';
+import { postcodeFromAddress } from '../supabase/functions/_shared/project-enrichment.js';
 
 const ProjectMap = lazy(() => import('./ProjectMap'));
 const API = '/api';
@@ -22,6 +23,31 @@ const fallback = [
 ];
 const fmtDate = d => d ? new Intl.DateTimeFormat('en-GB').format(new Date(d)) : 'Not published';
 const value = (v, fallbackText='Not published') => String(v || '').trim() || fallbackText;
+const timingLabel = timing => ({
+  completing_0_3m:'Completing 0–3 months',
+  decorating_3_9m:'Decorating window',
+  monitor_9_18m:'Monitor 9–18 months',
+  early_over_18m:'Early opportunity',
+  overdue:'Past finish date',
+  unknown:'Timing unknown',
+})[timing||'unknown']||'Timing unknown';
+const programmeLabel = stage => ({
+  early:'Early programme',
+  mid:'Mid programme',
+  late:'Late programme',
+  closed:'Closed',
+  unknown:'Stage unknown',
+})[stage||'unknown']||'Stage unknown';
+const projectCompleteness = (project,meta={},intelligence={}) => {
+  const fields=[
+    project.Name,project.MainContractor,project.Client,project.LaId,
+    meta.address,project.Latitude!=null&&project.Longitude!=null,meta.site_start_date,
+    meta.site_end_date,meta.site_manager_name,meta.site_manager_phone,
+    meta.marker_email,intelligence.programme_stage&&intelligence.programme_stage!=='unknown',
+    intelligence.gsd_timing&&intelligence.gsd_timing!=='unknown',
+  ];
+  return Math.round(fields.filter(Boolean).length/fields.length*100);
+};
 const unique = (items, key) => [...new Set(items.map(item => item[key]).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
 const isoDateMonthsFromNow = months => {
   const date = new Date();
@@ -73,7 +99,7 @@ function App({session,cloudEnabled}){
   const [attioLinks,setAttioLinks]=useState({}), [enrichment,setEnrichment]=useState({});
   const [tasks,setTasks]=useState([]);
   const [outreachLeads,setOutreachLeads]=useState([]), [communications,setCommunications]=useState([]), [suppressions,setSuppressions]=useState([]);
-  const [draftFilters,setDraftFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',liveOnly:true}), [filters,setFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',liveOnly:true});
+  const [draftFilters,setDraftFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true}), [filters,setFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true});
   const draftFiltersRef=useRef(draftFilters);
 
   const load=()=>{setLoading(true);setError('');apiFetch(`${API}/projects`,{cache:'no-store'}).then(async r=>{if(!r.ok) throw new Error((await r.json()).error||'Unable to load CCS projects');return r.json()}).then(d=>setProjects(d.projects||fallback)).catch(err=>{setProjects(fallback);setError(`${err.message}. Showing cached examples.`)}).finally(()=>setLoading(false))};
@@ -81,7 +107,7 @@ function App({session,cloudEnabled}){
   useEffect(()=>{ if(!cloudEnabled) return; Promise.all([
     supabase.from('saved_projects').select('project_id'),
     supabase.from('project_notes').select('project_id,note'),
-    fetchAllRows('ccs_projects','project_id,first_seen_at,last_seen_at,last_changed_at,discovered_after_baseline,is_active,site_start_date,site_end_date,site_closed'),
+    fetchAllRows('ccs_projects','project_id,first_seen_at,last_seen_at,last_changed_at,discovered_after_baseline,is_active,site_start_date,site_end_date,site_closed,address,site_manager_name,site_manager_job_title,site_manager_phone,marker_email,last_visit_date,detail_last_checked_at'),
     supabase.from('ccs_sync_runs').select('completed_at,total_projects,new_projects,changed_projects,detail_projects,detail_errors,status').eq('status','completed').order('completed_at',{ascending:false}).limit(1).maybeSingle(),
     supabase.from('lead_tracking').select('project_id,stage,assigned_email,next_action,next_action_at,updated_at'),
     supabase.from('project_tasks').select('*').order('completed',{ascending:true}).order('due_date',{ascending:true,nullsFirst:false}).order('created_at',{ascending:false}),
@@ -95,16 +121,28 @@ function App({session,cloudEnabled}){
 
   const options=useMemo(()=>({locations:unique(projects,'LaId'),contractors:unique(projects,'MainContractor'),clients:unique(projects,'Client')}),[projects]);
   const filtered=useMemo(()=>projects.filter(p=>{
-    const search=[p.Name,p.MainContractor,p.Client,p.LaId,p.Id].join(' ').toLowerCase();
-    const meta=history[p.Id], age=meta?Date.now()-new Date(meta.first_seen_at).getTime():Infinity, changedAge=meta?Date.now()-new Date(meta.last_changed_at).getTime():Infinity;
+    const intelligence=enrichment[p.Id]||{}, meta=history[p.Id]||{};
+    const search=[
+      p.Name,p.MainContractor,p.Client,p.LaId,p.Id,meta.address,
+      meta.site_manager_name,intelligence.sector,intelligence.work_type,
+      timingLabel(intelligence.gsd_timing),programmeLabel(intelligence.programme_stage),
+    ].join(' ').toLowerCase();
+    const age=meta.first_seen_at?Date.now()-new Date(meta.first_seen_at).getTime():Infinity, changedAge=meta.last_changed_at?Date.now()-new Date(meta.last_changed_at).getTime():Infinity;
     return (!query.trim()||search.includes(query.trim().toLowerCase()))
       && (!filters.location||p.LaId===filters.location)
       && (!filters.contractor||p.MainContractor===filters.contractor)
       && (!filters.client||p.Client===filters.client)
       && (!filters.recency||(filters.recency==='new'&&meta?.discovered_after_baseline&&age<=NEW_DAYS*86400000)||(filters.recency==='updated'&&changedAge<=NEW_DAYS*86400000&&new Date(meta.last_changed_at).getTime()>new Date(meta.first_seen_at).getTime()+1000))
       && matchesCompletionWindow(meta?.site_end_date||p.SiteEndDate,filters.completionWindow)
+      && (!filters.opportunity
+        || (filters.opportunity==='decorating'&&intelligence.gsd_timing==='decorating_3_9m')
+        || (filters.opportunity==='fit-out'&&intelligence.fit_out_state==='yes')
+        || (filters.opportunity==='new-build-housing'&&intelligence.new_build_housing_state==='yes')
+        || (filters.opportunity==='contact'&&Boolean(meta?.marker_email||meta?.site_manager_phone))
+        || (filters.opportunity==='attio'&&Boolean(attioLinks[p.Id]?.attio_web_url))
+        || (filters.opportunity==='needs-classification'&&!intelligence.sector&&!intelligence.work_type))
       && (!filters.liveOnly||p.TypeOfSite==='CCS'||!p.TypeOfSite);
-  }),[projects,query,filters,history]);
+  }),[projects,query,filters,history,enrichment,attioLinks]);
   const visibleProjects=activeView==='saved'?filtered.filter(p=>saved.has(p.Id)):filtered;
   const totalPages=Math.max(1,Math.ceil(visibleProjects.length/PAGE_SIZE));
   const shown=visibleProjects.slice((page-1)*PAGE_SIZE,page*PAGE_SIZE);
@@ -162,7 +200,7 @@ function App({session,cloudEnabled}){
   };
   const updateDraftFilter=(key,nextValue)=>setDraftFilters(current=>{const next={...current,[key]:nextValue};draftFiltersRef.current=next;return next});
   const applyFilters=()=>setFilters({...draftFiltersRef.current});
-  const clearFilters=()=>{const empty={location:'',contractor:'',client:'',recency:'',completionWindow:'',liveOnly:true};draftFiltersRef.current=empty;setDraftFilters(empty);setFilters(empty);setQuery('')};
+  const clearFilters=()=>{const empty={location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true};draftFiltersRef.current=empty;setDraftFilters(empty);setFilters(empty);setQuery('')};
   const goToView=id=>{setActiveView(id);closeProject();setMobileMoreOpen(false)};
 
   return <div className="app">
@@ -171,6 +209,7 @@ function App({session,cloudEnabled}){
       <SelectFilter label="Location" value={draftFilters.location} onChange={location=>updateDraftFilter('location',location)} options={options.locations} allLabel="All locations"/>
       <SelectFilter label="Lead activity" value={draftFilters.recency} onChange={recency=>updateDraftFilter('recency',recency)} options={['new','updated']} allLabel="All project activity"/>
       <label className="filter"><span>Completion window</span><select value={draftFilters.completionWindow} onChange={e=>updateDraftFilter('completionWindow',e.target.value)}><option value="">Any completion date</option><option value="next-3">Completing in 0–3 months</option><option value="3-9">Decorating window: 3–9 months</option><option value="9-18">Completing in 9–18 months</option><option value="past">Past completion date</option><option value="unknown">Completion date unknown</option></select></label>
+      <label className="filter"><span>Sales opportunity</span><select value={draftFilters.opportunity} onChange={e=>updateDraftFilter('opportunity',e.target.value)}><option value="">All opportunities</option><option value="decorating">Decorating window</option><option value="fit-out">Confirmed fit-out</option><option value="new-build-housing">Confirmed new-build housing</option><option value="contact">Contact available</option><option value="attio">Linked in Attio</option><option value="needs-classification">Needs classification</option></select></label>
       <label className="switch-row"><span>Live Sites Only</span><input type="checkbox" checked={draftFilters.liveOnly} onChange={e=>updateDraftFilter('liveOnly',e.target.checked)}/><i/></label>
       <SelectFilter label="Contractor" value={draftFilters.contractor} onChange={contractor=>updateDraftFilter('contractor',contractor)} options={options.contractors} allLabel="All contractors"/>
       <SelectFilter label="Client" value={draftFilters.client} onChange={client=>updateDraftFilter('client',client)} options={options.clients} allLabel="All clients"/>
@@ -180,7 +219,7 @@ function App({session,cloudEnabled}){
       {(activeView==='projects'||activeView==='saved')&&<><section className="toolbar"><div><strong>{visibleProjects.length.toLocaleString()} {activeView==='saved'?'saved':'active'} projects</strong><button className="icon" onClick={load} aria-label="Refresh projects"><RefreshCw size={16}/></button></div><label className="search"><Search size={18}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search projects, contractors, clients, locations…" aria-label="Search projects"/></label><button className="filter-mobile" onClick={()=>document.querySelector('aside')?.classList.toggle('open')}><SlidersHorizontal size={17}/> Filters</button></section>
         {error&&<div className="notice" role="alert">{error}<button onClick={()=>setError('')}><X size={15}/></button></div>}
         {syncIsStale&&<div className="notice sync-warning" role="alert">CCS data may be out of date. The last successful nightly sync was {new Date(syncStatus.completed_at).toLocaleString('en-GB')}.</div>}
-        <ProjectTable loading={loading} projects={shown} selected={selected} saved={saved} notes={notes} history={history} tracking={tracking} open={open} toggleSave={toggleSave} addNote={addNote}/>
+        <ProjectTable loading={loading} projects={shown} selected={selected} saved={saved} notes={notes} history={history} tracking={tracking} enrichment={enrichment} attioLinks={attioLinks} open={open} toggleSave={toggleSave} addNote={addNote}/>
         <footer><div><span>Showing {shown.length?((page-1)*PAGE_SIZE)+1:0}–{Math.min(page*PAGE_SIZE,visibleProjects.length)} of {visibleProjects.length.toLocaleString()}</span>{syncStatus&&<small className="sync-status">CCS synced {new Date(syncStatus.completed_at).toLocaleString('en-GB')} · {syncStatus.new_projects} new · {syncStatus.changed_projects} updated{syncStatus.detail_projects?` · ${syncStatus.detail_projects} details checked`:''}{syncStatus.detail_errors?` · ${syncStatus.detail_errors} detail errors`:''}</small>}</div><div className="pagination"><button disabled={page===1} onClick={()=>setPage(x=>x-1)} aria-label="Previous page"><ChevronLeft size={16}/></button><b>Page {page} of {totalPages}</b><button disabled={page===totalPages} onClick={()=>setPage(x=>x+1)} aria-label="Next page"><ChevronRight size={16}/></button></div></footer>
       </>}
       {activeView==='map'&&<><section className="map-toolbar"><div className="map-toolbar-count"><strong>{filtered.length.toLocaleString()} projects on map</strong><button className="icon" onClick={load} aria-label="Refresh projects"><RefreshCw size={16}/></button></div><label className="search"><Search size={18}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search projects, contractors, clients, locations…" aria-label="Search map projects"/></label><button className="filter-mobile" onClick={()=>document.querySelector('aside')?.classList.toggle('open')}><SlidersHorizontal size={17}/> Filters</button><button className="fit-results" onClick={()=>setMapFitRequest(value=>value+1)}><LocateFixed size={17}/><span>Fit results</span></button></section>
@@ -196,8 +235,26 @@ function App({session,cloudEnabled}){
   </div>
 }
 
-function ProjectTable({loading,projects,selected,saved,notes,history,tracking,open,toggleSave,addNote}){
-  return <div className="table-wrap"><table className="projects-table"><thead><tr><th>Project</th><th>Contractor</th><th>Location</th><th>Client</th><th>Start</th><th>Finish</th><th>Contact</th><th>Saved</th><th>Notes</th></tr></thead><tbody>{loading?<tr><td colSpan="9" className="empty">Loading the live CCS feed…</td></tr>:projects.length===0?<tr><td colSpan="9" className="empty"><Search size={24}/><b>No projects found</b><span>Try changing your search or filters.</span></td></tr>:projects.map(p=>{const meta=history[p.Id],startDate=meta?.site_start_date||p.SiteStartDate,endDate=meta?.site_end_date||p.SiteEndDate,isNew=meta?.discovered_after_baseline&&Date.now()-new Date(meta.first_seen_at).getTime()<=NEW_DAYS*86400000,isUpdated=meta&&Date.now()-new Date(meta.last_changed_at).getTime()<=NEW_DAYS*86400000&&new Date(meta.last_changed_at).getTime()>new Date(meta.first_seen_at).getTime()+1000&&!isNew;return <tr key={p.Id} data-completion-date={endDate||''} className={selected?.Id===p.Id?'selected':''}><td><div className="project-line"><button className="project" onClick={()=>open(p)}>{p.Name}</button>{isNew&&<span className="badge new">New</span>}{isUpdated&&<span className="badge updated">Updated</span>}{tracking[p.Id]?.stage&&tracking[p.Id].stage!=='new'&&<span className={`badge stage-${tracking[p.Id].stage}`}>{tracking[p.Id].stage}</span>}</div><small>CCS {p.Id.replace('site','')}</small></td><td>{value(p.MainContractor)}</td><td><MapPin size={14}/>{value(p.LaId)}</td><td>{value(p.Client)}</td><td className={`date-cell ${startDate?'':'missing'}`}>{fmtDate(startDate)}</td><td className={`date-cell ${endDate?'':'missing'}`}>{fmtDate(endDate)}</td><td><button className="reveal" onClick={()=>open(p)}>View</button></td><td><button className={'row-icon '+(saved.has(p.Id)?'saved':'')} onClick={()=>toggleSave(p)} aria-label={`${saved.has(p.Id)?'Remove':'Save'} ${p.Name}`}><Star size={18} fill={saved.has(p.Id)?'currentColor':'none'}/></button></td><td><button className="row-icon" onClick={()=>addNote(p)} aria-label={`Note for ${p.Name}`}><StickyNote size={18}/>{notes[p.Id]&&<em/>}</button></td></tr>})}</tbody></table></div>
+function ProjectTable({loading,projects,selected,saved,notes,history,tracking,enrichment,attioLinks,open,toggleSave,addNote}){
+  return <div className="table-wrap"><table className="projects-table"><thead><tr><th>Project</th><th>Contractor</th><th>Opportunity</th><th>Location</th><th>Finish</th><th>Contact</th><th>Attio</th><th>Saved</th><th>Notes</th></tr></thead><tbody>{loading?<tr><td colSpan="9" className="empty">Loading the live CCS feed…</td></tr>:projects.length===0?<tr><td colSpan="9" className="empty"><Search size={24}/><b>No projects found</b><span>Try changing your search or filters.</span></td></tr>:projects.map(p=>{
+    const meta=history[p.Id]||{}, intelligence=enrichment[p.Id]||{}, attioLink=attioLinks[p.Id];
+    const endDate=meta.site_end_date||p.SiteEndDate;
+    const isNew=meta.discovered_after_baseline&&Date.now()-new Date(meta.first_seen_at).getTime()<=NEW_DAYS*86400000;
+    const isUpdated=meta.last_changed_at&&Date.now()-new Date(meta.last_changed_at).getTime()<=NEW_DAYS*86400000&&new Date(meta.last_changed_at).getTime()>new Date(meta.first_seen_at).getTime()+1000&&!isNew;
+    const contactChannels=[meta.marker_email&&'email',meta.site_manager_phone&&'phone'].filter(Boolean).join(' + ');
+    const classification=[intelligence.sector,intelligence.work_type].filter(Boolean).join(' · ');
+    return <tr key={p.Id} data-completion-date={endDate||''} className={selected?.Id===p.Id?'selected':''}>
+      <td><div className="project-line"><button className="project" onClick={()=>open(p)}>{p.Name}</button>{isNew&&<span className="badge new">New</span>}{isUpdated&&<span className="badge updated">Updated</span>}{tracking[p.Id]?.stage&&tracking[p.Id].stage!=='new'&&<span className={`badge stage-${tracking[p.Id].stage}`}>{tracking[p.Id].stage}</span>}</div><small>CCS {p.Id.replace('site','')} · {projectCompleteness(p,meta,intelligence)}% complete</small></td>
+      <td>{value(p.MainContractor)}</td>
+      <td className="opportunity-cell"><span className={`timing-pill timing-${intelligence.gsd_timing||'unknown'}`}>{timingLabel(intelligence.gsd_timing)}</span><small>{classification||programmeLabel(intelligence.programme_stage)}</small></td>
+      <td><MapPin size={14}/><span>{postcodeFromAddress(meta.address)||value(p.LaId)}</span></td>
+      <td className={`date-cell ${endDate?'':'missing'}`}>{fmtDate(endDate)}<small>{programmeLabel(intelligence.programme_stage)}</small></td>
+      <td><button className="contact-summary" onClick={()=>open(p)}><b>{meta.site_manager_name||'Not published'}</b><small>{contactChannels||'Open project details'}</small></button></td>
+      <td>{attioLink?.attio_web_url?<a className="attio-row-link" href={attioLink.attio_web_url} target="_blank" rel="noreferrer">Open <ExternalLink size={13}/></a>:<span className="pending-link">Pending</span>}</td>
+      <td><button className={'row-icon '+(saved.has(p.Id)?'saved':'')} onClick={()=>toggleSave(p)} aria-label={`${saved.has(p.Id)?'Remove':'Save'} ${p.Name}`}><Star size={18} fill={saved.has(p.Id)?'currentColor':'none'}/></button></td>
+      <td><button className="row-icon" onClick={()=>addNote(p)} aria-label={`Note for ${p.Name}`}><StickyNote size={18}/>{notes[p.Id]&&<em/>}</button></td>
+    </tr>
+  })}</tbody></table></div>
 }
 
 function Insights({projects,saved,contractorStats}){
@@ -282,6 +339,14 @@ function projectDescription(detail,selected){
 function ProjectDrawer({className='',selected,detail,close,saved,toggleSave,note,addNote,meta,attioLink,enrichment={},tracking={},updateTracking,tasks,createTask,toggleTask,deleteTask,outreachLead,queueOutreach,communications,logCommunication}){
   const label=value=>String(value||'unknown').split('_').map(word=>word[0].toUpperCase()+word.slice(1)).join(' ');
   const mapUrl=enrichment.map_url||(selected.Latitude&&selected.Longitude?`https://www.google.com/maps/search/?api=1&query=${selected.Latitude},${selected.Longitude}`:null);
+  const detailContactName=[detail?.SiteManagerFirstName,detail?.SiteManagerLastName].filter(Boolean).join(' ');
+  const contactName=detailContactName||meta?.site_manager_name||'Not published';
+  const contactRole=detail?.SiteManagerJobTitle||meta?.site_manager_job_title||'Site contact';
+  const contactPhone=detail?.SiteManagerPhone||meta?.site_manager_phone;
+  const contactEmail=detail?.MarkerEmail||meta?.marker_email;
+  const address=detail?.Address||meta?.address||selected.LaId;
+  const postcode=postcodeFromAddress(address);
+  const completeness=projectCompleteness(selected,meta,enrichment);
   return <div className={`drawer ${className}`} role="dialog" aria-label={`${selected.Name} project details`}>
     <div className="drawer-head"><div><h2>{selected.Name}</h2><p>CCS {selected.Id.replace('site','')}{meta&&` · First seen ${fmtDate(meta.first_seen_at)}`}</p></div><button className="icon" onClick={close} aria-label="Close project details"><X/></button></div>
     <div className="drawer-actions">
@@ -295,18 +360,22 @@ function ProjectDrawer({className='',selected,detail,close,saved,toggleSave,note
     <section><div className="section-title"><h3>Communication history</h3></div><CommunicationTimeline communications={communications}/><div className="communication-actions"><button onClick={()=>logCommunication('phone')}><Phone size={15}/> Log call</button><button onClick={()=>logCommunication('note')}><StickyNote size={15}/> Add note</button></div></section>
     {!detail?<div className="drawer-loading">Loading verified project record…</div>:<>
       <section><h3>Project description</h3><p>{projectDescription(detail,selected)}</p></section>
-      <section><h3>Contact</h3><h4>{[detail.SiteManagerFirstName,detail.SiteManagerLastName].filter(Boolean).join(' ')||'Not published'}</h4><p>{detail.SiteManagerJobTitle||'Site contact'}</p>{detail.SiteManagerPhone&&<a href={`tel:${detail.SiteManagerPhone}`}><Phone size={15}/>{detail.SiteManagerPhone}</a>}{detail.MarkerEmail&&<a href={`mailto:${detail.MarkerEmail}`}><Mail size={15}/>{detail.MarkerEmail}</a>}</section>
+      <section><h3>CCS site contact</h3><h4>{contactName}</h4><p>{contactRole}</p>{contactPhone&&<a href={`tel:${contactPhone}`}><Phone size={15}/>{contactPhone}</a>}{contactEmail&&<a href={`mailto:${contactEmail}`}><Mail size={15}/>{contactEmail}</a>}<small className="native-source">Published by CCS and held in SiteFinder</small></section>
       <section className="facts"><h3>Project intelligence</h3><dl>
         <dt>GSD Timing</dt><dd>{label(enrichment.gsd_timing)}</dd>
         <dt>Programme</dt><dd>{label(enrichment.programme_stage)}</dd>
+        <dt>Months Remaining</dt><dd>{enrichment.months_remaining??'Unknown'}</dd>
         <dt>Fit Out</dt><dd>{label(enrichment.fit_out_state)}</dd>
         <dt>New Build Housing</dt><dd>{label(enrichment.new_build_housing_state)}</dd>
         <dt>Sector</dt><dd>{enrichment.sector||'Unknown'}</dd>
         <dt>Work Type</dt><dd>{enrichment.work_type||'Unknown'}</dd>
         <dt>CCS Rating</dt><dd>{enrichment.ccs_rating||'Not published'}</dd>
+        <dt>Complaints</dt><dd>{enrichment.complaints_count??'Not published'}</dd>
+        <dt>Registrations</dt><dd>{enrichment.registration_count??'Not published'}</dd>
+        <dt>Data Coverage</dt><dd>{completeness}%</dd>
       </dl>{enrichment.classification_evidence?.length>0&&<p className="classification-evidence">{enrichment.classification_evidence.join(' · ')}</p>}</section>
-      <section className="facts"><h3>Project details</h3><dl><dt>Main Contractor</dt><dd>{value(detail.MainContractor||selected.MainContractor)}</dd><dt>Client</dt><dd>{value(detail.Client||selected.Client)}</dd><dt>Project Period</dt><dd><CalendarDays size={14}/>{fmtDate(detail.SiteStartDate)} – {fmtDate(detail.SiteEndDate)}</dd><dt>Address</dt><dd>{value(detail.Address||selected.LaId)}</dd><dt>Local Authority</dt><dd>{value(detail.LocalAuthority||selected.LaId)}</dd></dl></section>
-      <section className="record-links"><h3>Connected records</h3>{attioLink?.attio_web_url?<a className="source" href={attioLink.attio_web_url} target="_blank" rel="noreferrer">Open linked Attio Project <ExternalLink size={15}/></a>:<p>Attio project link pending.</p>}{mapUrl&&<a className="source" href={mapUrl} target="_blank" rel="noreferrer">Open project map <MapPin size={15}/></a>}<a className="source" href={detail.SourceUrl} target="_blank" rel="noreferrer">Open verified CCS source record <ExternalLink size={15}/></a></section>
+      <section className="facts"><h3>Project details</h3><dl><dt>Main Contractor</dt><dd>{value(detail.MainContractor||selected.MainContractor)}</dd><dt>Client</dt><dd>{value(detail.Client||selected.Client)}</dd><dt>Project Period</dt><dd><CalendarDays size={14}/>{fmtDate(detail.SiteStartDate||meta?.site_start_date)} – {fmtDate(detail.SiteEndDate||meta?.site_end_date)}</dd><dt>Address</dt><dd>{value(address)}</dd><dt>Postcode</dt><dd>{postcode||'Not published'}</dd><dt>Local Authority</dt><dd>{value(detail.LocalAuthority||selected.LaId)}</dd><dt>Last CCS Visit</dt><dd>{fmtDate(detail.LastVisitDate||meta?.last_visit_date)}</dd><dt>Last Detail Check</dt><dd>{meta?.detail_last_checked_at?new Date(meta.detail_last_checked_at).toLocaleString('en-GB'):'Not published'}</dd></dl></section>
+      <section className="record-links"><h3>Connected records</h3>{attioLink?.attio_web_url?<><a className="source" href={attioLink.attio_web_url} target="_blank" rel="noreferrer">Open linked Attio Project <ExternalLink size={15}/></a><small>Last linked {attioLink.synced_at?new Date(attioLink.synced_at).toLocaleString('en-GB'):'date not published'}</small></>:<p>Attio project link pending.</p>}{mapUrl&&<a className="source" href={mapUrl} target="_blank" rel="noreferrer">Open project map <MapPin size={15}/></a>}<a className="source" href={detail.SourceUrl} target="_blank" rel="noreferrer">Open verified CCS source record <ExternalLink size={15}/></a></section>
     </>}
   </div>
 }

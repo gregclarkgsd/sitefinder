@@ -11,6 +11,10 @@ import {
   optionalValues,
   recordReference,
 } from '../_shared/attio.ts';
+import {
+  classifyCcsProject,
+  postcodeFromAddress,
+} from '../_shared/project-enrichment.js';
 import { safeBoolean, safeBooleanWithFallback } from '../_shared/values.ts';
 
 const SITEFINDER_URL = 'https://gsd-sitefinder.onrender.com';
@@ -64,6 +68,7 @@ type ProjectRow = {
   site_closed: boolean | null;
   summary: string | null;
   last_visit_date: string | null;
+  detail_last_checked_at: string | null;
   detail_data: JsonRecord | null;
   ccs_project_enrichment?: Enrichment | Enrichment[] | null;
 };
@@ -108,6 +113,51 @@ const PROJECT_ATTRIBUTES: AttributeDefinition[] = [
     aliases: ['google maps', 'map link'],
   },
   {
+    title: 'Project Address',
+    api_slug: 'site_address',
+    type: 'text',
+    description: 'Full project address published on the CCS record.',
+    aliases: ['address', 'project_address'],
+  },
+  {
+    title: 'Postcode',
+    api_slug: 'postcode',
+    type: 'text',
+    description: 'UK postcode extracted from the published CCS address.',
+  },
+  {
+    title: 'Local Authority',
+    api_slug: 'local_authority',
+    type: 'text',
+    description: 'Local authority published on the CCS record.',
+  },
+  {
+    title: 'Site Start Date',
+    api_slug: 'site_start_date',
+    type: 'date',
+    description: 'Published CCS project start date.',
+    aliases: ['start_date'],
+  },
+  {
+    title: 'Site Finish Date',
+    api_slug: 'site_end_date',
+    type: 'date',
+    description: 'Published CCS project finish date.',
+    aliases: ['end_date'],
+  },
+  {
+    title: 'Months Remaining',
+    api_slug: 'months_remaining',
+    type: 'number',
+    description: 'Whole months from today to the published project finish date.',
+  },
+  {
+    title: 'Site Closed',
+    api_slug: 'site_closed',
+    type: 'checkbox',
+    description: 'Whether CCS marks the site as closed.',
+  },
+  {
     title: 'GSD Timing',
     api_slug: 'gsd_timing',
     type: 'text',
@@ -118,6 +168,12 @@ const PROJECT_ATTRIBUTES: AttributeDefinition[] = [
     api_slug: 'programme_stage',
     type: 'text',
     description: 'Early, mid, late, closed or unknown based on the CCS programme dates.',
+  },
+  {
+    title: 'Site Contact Name',
+    api_slug: 'site_contact_name',
+    type: 'text',
+    description: 'Site contact name published on the CCS record.',
   },
   {
     title: 'Site Manager Job Title',
@@ -136,6 +192,12 @@ const PROJECT_ATTRIBUTES: AttributeDefinition[] = [
     api_slug: 'site_contact_phone',
     type: 'text',
     description: 'Contact telephone number published on the CCS record.',
+  },
+  {
+    title: 'Contact Available',
+    api_slug: 'contact_available',
+    type: 'checkbox',
+    description: 'Whether the CCS record includes a usable email or telephone number.',
   },
   {
     title: 'CCS Source',
@@ -224,6 +286,48 @@ const PROJECT_ATTRIBUTES: AttributeDefinition[] = [
     description: 'Whether the CCS record identifies this as an Ultra Site.',
   },
   {
+    title: 'First Seen in SiteFinder',
+    api_slug: 'first_seen',
+    type: 'timestamp',
+    description: 'When SiteFinder first observed this CCS project.',
+  },
+  {
+    title: 'Last Seen in SiteFinder',
+    api_slug: 'last_seen',
+    type: 'timestamp',
+    description: 'When SiteFinder most recently observed this CCS project.',
+  },
+  {
+    title: 'Last Changed in SiteFinder',
+    api_slug: 'last_changed',
+    type: 'timestamp',
+    description: 'When SiteFinder most recently detected a CCS source change.',
+  },
+  {
+    title: 'Last CCS Visit',
+    api_slug: 'last_visit_date',
+    type: 'date',
+    description: 'Most recent visit date published on the CCS record.',
+  },
+  {
+    title: 'CCS Detail Last Checked',
+    api_slug: 'ccs_detail_last_checked',
+    type: 'timestamp',
+    description: 'When SiteFinder most recently checked the detailed CCS record.',
+  },
+  {
+    title: 'Project Data Completeness',
+    api_slug: 'project_data_completeness',
+    type: 'number',
+    description: 'Percentage of core SiteFinder project fields currently populated.',
+  },
+  {
+    title: 'Data Sources',
+    api_slug: 'data_sources',
+    type: 'text',
+    description: 'Systems supplying the project data.',
+  },
+  {
     title: 'Last Refreshed',
     api_slug: 'last_refreshed',
     type: 'timestamp',
@@ -297,6 +401,25 @@ function safeNumber(value: unknown) {
   return Number.isFinite(number) ? number : null;
 }
 
+function dataCompleteness(project: ProjectRow, enrichment: Enrichment) {
+  const fields = [
+    project.project_name,
+    project.main_contractor,
+    project.client,
+    project.local_authority,
+    project.address,
+    project.latitude !== null && project.longitude !== null,
+    project.site_start_date,
+    project.site_end_date,
+    project.site_manager_name,
+    project.site_manager_phone,
+    project.marker_email,
+    enrichment.programme_stage && enrichment.programme_stage !== 'unknown',
+    enrichment.gsd_timing && enrichment.gsd_timing !== 'unknown',
+  ];
+  return Math.round(fields.filter(Boolean).length / fields.length * 100);
+}
+
 function deriveEnrichment(project: ProjectRow): Enrichment {
   const existing = firstRelation(project.ccs_project_enrichment) || {};
   const start = project.site_start_date ? new Date(`${project.site_start_date}T00:00:00Z`) : null;
@@ -331,9 +454,20 @@ function deriveEnrichment(project: ProjectRow): Enrichment {
   const mapUrl = project.latitude === null || project.longitude === null
     ? null
     : `https://www.google.com/maps/search/?api=1&query=${project.latitude},${project.longitude}`;
+  const method = String(existing.classification_method || '');
+  const preserveCuratedClassification = Boolean(
+    method && !['ccs_deterministic_v1', 'ccs_text_deterministic_v2'].includes(method),
+  );
+  const classification: Enrichment = preserveCuratedClassification
+    ? {}
+    : classifyCcsProject({
+      project_name: project.project_name,
+      summary: project.summary,
+    });
 
   return {
     ...existing,
+    ...classification,
     programme_stage: programmeStage,
     gsd_timing: gsdTiming,
     months_remaining: monthsRemaining,
@@ -346,7 +480,9 @@ function deriveEnrichment(project: ProjectRow): Enrichment {
     has_alerts: safeBoolean(details.Alerts),
     has_news: safeBoolean(details.News),
     is_ultra_site: safeBooleanWithFallback(details.UltraSite, project.source_data?.UltraSite),
-    classification_method: existing.classification_method || 'ccs_deterministic_v1',
+    classification_method: preserveCuratedClassification
+      ? existing.classification_method
+      : classification.classification_method,
   };
 }
 
@@ -464,6 +600,18 @@ function put(
   }
 }
 
+function putOrClear(
+  values: Record<string, unknown>,
+  attributes: AttioAttribute[],
+  aliases: string[],
+  value: unknown,
+) {
+  const attribute = findAttribute(attributes, aliases);
+  if (!attribute?.is_writable) return;
+  put(values, attributes, aliases, value);
+  if (!(attribute.api_slug in values)) values[attribute.api_slug] = [];
+}
+
 function putReference(
   values: Record<string, unknown>,
   attributes: AttioAttribute[],
@@ -480,6 +628,8 @@ function putReference(
     values[attribute.api_slug] = recordReference(targetObject, targetRecordId);
   } else if (attribute.type === 'text' && textFallback) {
     values[attribute.api_slug] = textFallback;
+  } else {
+    values[attribute.api_slug] = [];
   }
 }
 
@@ -655,40 +805,67 @@ async function upsertProjectRecord(
   put(values, attributes, ['stage'], timingLabel(enrichment.gsd_timing));
   put(values, attributes, ['gsd_timing'], timingLabel(enrichment.gsd_timing));
   put(values, attributes, ['programme_stage'], programmeLabel(enrichment.programme_stage));
-  put(values, attributes, ['months_remaining', 'months remaining'], enrichment.months_remaining);
-  put(values, attributes, ['start_date', 'site_start_date'], project.site_start_date);
-  put(values, attributes, ['end_date', 'site_end_date'], project.site_end_date);
-  put(values, attributes, ['address', 'project_address'], project.address);
-  put(values, attributes, ['local_authority'], project.local_authority);
-  put(values, attributes, ['site_closed'], project.site_closed);
+  putOrClear(
+    values,
+    attributes,
+    ['months_remaining', 'months remaining'],
+    enrichment.months_remaining,
+  );
+  putOrClear(values, attributes, ['start_date', 'site_start_date'], project.site_start_date);
+  putOrClear(values, attributes, ['end_date', 'site_end_date'], project.site_end_date);
+  putOrClear(values, attributes, ['site_address', 'address', 'project_address'], project.address);
+  putOrClear(values, attributes, ['postcode'], postcodeFromAddress(project.address));
+  putOrClear(values, attributes, ['local_authority'], project.local_authority);
+  putOrClear(values, attributes, ['site_closed'], project.site_closed);
   put(values, attributes, ['first_seen'], project.first_seen_at);
   put(values, attributes, ['last_seen'], project.last_seen_at);
-  put(values, attributes, ['last_visit_date'], project.last_visit_date);
+  put(values, attributes, ['last_changed'], project.last_changed_at);
+  putOrClear(values, attributes, ['last_visit_date'], project.last_visit_date);
+  putOrClear(
+    values,
+    attributes,
+    ['ccs_detail_last_checked'],
+    project.detail_last_checked_at,
+  );
   put(values, attributes, ['last_refreshed', 'sitefinder_synced_at'], new Date().toISOString());
   put(values, attributes, ['sitefinder_url', 'sitefinder link'], sitefinderProjectUrl(project.project_id));
-  put(values, attributes, ['map_url', 'map link', 'google maps'], enrichment.map_url);
+  putOrClear(values, attributes, ['map_url', 'map link', 'google maps'], enrichment.map_url);
   put(values, attributes, ['ccs_source_url', 'sitefinder_source_url'], ccsSourceUrl(project.project_id));
-  put(values, attributes, ['project_summary', 'summary'], project.summary);
-  put(values, attributes, ['site_manager_job_title'], project.site_manager_job_title);
-  put(values, attributes, ['site_contact_email'], project.marker_email);
-  put(values, attributes, ['site_contact_phone'], project.site_manager_phone);
-  put(values, attributes, ['ccs_rating'], enrichment.ccs_rating);
-  put(values, attributes, ['complaints_count'], enrichment.complaints_count);
-  put(values, attributes, ['registration_count'], enrichment.registration_count);
+  putOrClear(values, attributes, ['project_summary', 'summary'], project.summary);
+  putOrClear(values, attributes, ['site_contact_name'], project.site_manager_name);
+  putOrClear(values, attributes, ['site_manager_job_title'], project.site_manager_job_title);
+  putOrClear(values, attributes, ['site_contact_email'], project.marker_email);
+  putOrClear(values, attributes, ['site_contact_phone'], project.site_manager_phone);
+  put(values, attributes, ['contact_available'], Boolean(project.marker_email || project.site_manager_phone));
+  putOrClear(values, attributes, ['ccs_rating'], enrichment.ccs_rating);
+  putOrClear(values, attributes, ['complaints_count'], enrichment.complaints_count);
+  putOrClear(values, attributes, ['registration_count'], enrichment.registration_count);
   put(values, attributes, ['has_ccs_alerts'], enrichment.has_alerts);
   put(values, attributes, ['has_ccs_news'], enrichment.has_news);
   put(values, attributes, ['is_ultra_site'], enrichment.is_ultra_site);
-  put(values, attributes, ['sector'], enrichment.sector);
-  put(values, attributes, ['work_type'], enrichment.work_type);
+  putOrClear(values, attributes, ['sector'], enrichment.sector);
+  putOrClear(values, attributes, ['work_type'], enrichment.work_type);
   put(values, attributes, ['fit_out_state'], enrichment.fit_out_state || 'unknown');
   put(values, attributes, ['new_build_housing_state'], enrichment.new_build_housing_state || 'unknown');
-  put(values, attributes, ['classification_confidence'], enrichment.classification_confidence);
-  put(
+  putOrClear(
+    values,
+    attributes,
+    ['classification_confidence'],
+    enrichment.classification_confidence,
+  );
+  putOrClear(
     values,
     attributes,
     ['classification_evidence'],
     (enrichment.classification_evidence || []).join(' · '),
   );
+  put(
+    values,
+    attributes,
+    ['project_data_completeness'],
+    dataCompleteness(project, enrichment),
+  );
+  put(values, attributes, ['data_sources'], 'CCS · GSD SiteFinder');
 
   putReference(
     values,
@@ -722,7 +899,7 @@ async function upsertProjectRecord(
 
   try {
     return existing
-      ? await attio.updateRecord(object, existing.id.record_id, optionalValues(values))
+      ? await attio.replaceRecordValues(object, existing.id.record_id, values)
       : await attio.createRecord(object, optionalValues(values));
   } catch (error) {
     const stageAttribute = findAttribute(attributes, ['stage']);
@@ -732,7 +909,7 @@ async function upsertProjectRecord(
     const withoutStage = { ...values };
     delete withoutStage[stageAttribute.api_slug];
     return existing
-      ? await attio.updateRecord(object, existing.id.record_id, optionalValues(withoutStage))
+      ? await attio.replaceRecordValues(object, existing.id.record_id, withoutStage)
       : await attio.createRecord(object, optionalValues(withoutStage));
   }
 }
@@ -784,6 +961,7 @@ async function syncProject(
       site_closed: project.site_closed,
       summary: project.summary,
       last_visit_date: project.last_visit_date,
+      detail_last_checked_at: project.detail_last_checked_at,
     },
     ccs: {
       performance: detail.PerformanceLevel,
@@ -842,7 +1020,7 @@ async function loadProjects(
     latitude, longitude, first_seen_at, last_seen_at, last_changed_at,
     is_active, source_data, address, site_manager_name, site_manager_job_title,
     site_manager_phone, marker_email, site_start_date, site_end_date, site_closed,
-    summary, last_visit_date, detail_data,
+    summary, last_visit_date, detail_last_checked_at, detail_data,
     ccs_project_enrichment (*)
   `).order('project_id');
 

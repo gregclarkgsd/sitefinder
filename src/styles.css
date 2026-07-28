@@ -30,3 +30,12 @@ tbody td:nth-child(3) svg{margin-right:6px;vertical-align:-2px}
 th:nth-child(n+5),td:nth-child(n+5){text-align:center}
 @media(min-width:701px){tbody td:nth-child(3){display:table-cell}}
 .projects-table{min-width:1260px}.projects-table .date-cell{white-space:nowrap;font-variant-numeric:tabular-nums;color:#334155}.projects-table .date-cell.missing{color:var(--muted);font-size:11px}
+.projects-table .opportunity-cell{display:table-cell}.timing-pill{display:inline-flex;padding:4px 8px;border-radius:999px;background:#eef2f7;color:#475569;font-size:10px;font-weight:800;white-space:nowrap}.timing-pill.timing-decorating_3_9m{background:#fff0e5;color:#b7460a}.timing-pill.timing-completing_0_3m{background:#fef3c7;color:#92400e}.timing-pill.timing-monitor_9_18m{background:#e8f3ff;color:#0b5cab}.timing-pill.timing-early_over_18m{background:#eef2ff;color:#4338ca}.contact-summary{display:block;max-width:180px;padding:0;border:0;background:transparent;text-align:left}.contact-summary b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.contact-summary:hover b{text-decoration:underline}.attio-row-link{display:inline-flex;align-items:center;gap:5px;color:#0b5cab;font-weight:700;text-decoration:none}.pending-link{color:var(--muted);font-size:11px}.native-source{margin-top:12px;padding-top:8px;border-top:1px solid var(--line)}
+@media(max-width:700px){
+  .projects-table{min-width:0}
+  .projects-table th:nth-child(1),.projects-table td:nth-child(1),.projects-table th:nth-child(3),.projects-table td:nth-child(3),.projects-table th:nth-child(5),.projects-table td:nth-child(5){display:table-cell}
+  .projects-table th:nth-child(2),.projects-table td:nth-child(2),.projects-table th:nth-child(4),.projects-table td:nth-child(4),.projects-table th:nth-child(6),.projects-table td:nth-child(6),.projects-table th:nth-child(7),.projects-table td:nth-child(7),.projects-table th:nth-child(8),.projects-table td:nth-child(8),.projects-table th:nth-child(9),.projects-table td:nth-child(9){display:none}
+  .projects-table th:nth-child(1){width:43%}
+  .projects-table th:nth-child(3){width:34%}
+  .projects-table th:nth-child(5){width:23%}
+}
