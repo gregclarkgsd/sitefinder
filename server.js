@@ -1,9 +1,11 @@
 import express from 'express';
 import path from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createClient } from '@supabase/supabase-js';
 import { createSiteFinderClient, createSiteFinderMcpServer } from './mcp/sitefinder-mcp.js';
+import { applyResearchIngestMessage } from './research-agent-ingest.js';
 
 const app = express();
 const PORT = process.env.PORT || 8787;
@@ -17,10 +19,18 @@ let scheduleCache = { at: 0, data: new Map(), lastAttemptAt: 0, lastError: null 
 let scheduleRefresh = null;
 const supabaseUrl = process.env.VITE_SUPABASE_URL;
 const supabaseKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
+const researchIngestToken = process.env.RESEARCH_AGENT_INGEST_TOKEN;
+const researchActorId = process.env.RESEARCH_AGENT_ACTOR_ID;
 const siteFinderOrigin = String(process.env.SITEFINDER_URL || 'https://gsd-sitefinder.onrender.com').replace(/\/+$/, '');
 const oauthIssuer = supabaseUrl ? `${supabaseUrl.replace(/\/+$/, '')}/auth/v1` : null;
 const authClient = supabaseUrl && supabaseKey
   ? createClient(supabaseUrl, supabaseKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  })
+  : null;
+const researchAdminClient = supabaseUrl && supabaseSecretKey
+  ? createClient(supabaseUrl, supabaseSecretKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   })
   : null;
@@ -33,6 +43,24 @@ app.use(express.json({ limit: '1mb' }));
 function bearerToken(req) {
   const header = String(req.get('authorization') || '');
   return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+}
+
+function secretsMatch(left, right) {
+  if (!left || !right) return false;
+  const leftBytes = Buffer.from(left);
+  const rightBytes = Buffer.from(right);
+  return leftBytes.length === rightBytes.length
+    && timingSafeEqual(leftBytes, rightBytes);
+}
+
+function requireResearchIngestAuth(req, res, next) {
+  if (!researchAdminClient || !researchIngestToken || !researchActorId) {
+    return res.status(503).json({ error: 'Research ingestion is not configured' });
+  }
+  if (!secretsMatch(bearerToken(req), researchIngestToken)) {
+    return res.status(401).json({ error: 'Invalid research ingestion credential' });
+  }
+  return next();
 }
 
 function isLocalPreview(req) {
@@ -204,6 +232,24 @@ app.get('/api/projects/:id', requireSiteFinderAuth, async (req, res) => {
     res.set('Cache-Control', 'private, no-store');
     res.json({ ...(await response.json()), SourceUrl: sourceUrl });
   } catch (error) { res.status(502).json({ error: error.message }); }
+});
+
+app.post('/api/research/ingest', requireResearchIngestAuth, async (req, res) => {
+  try {
+    const result = await applyResearchIngestMessage(
+      researchAdminClient,
+      req.body,
+      researchActorId,
+    );
+    res.status(202).json(result);
+  } catch (error) {
+    const validationFailure = error?.name === 'ZodError';
+    res.status(validationFailure ? 400 : 502).json({
+      error: validationFailure
+        ? 'Invalid research event'
+        : 'Research event could not be saved',
+    });
+  }
 });
 
 function protectedResourceMetadata() {

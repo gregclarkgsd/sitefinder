@@ -144,6 +144,20 @@ authorised changes through Supabase Realtime. When a saved run exists, the
 control room loads it automatically; otherwise it remains visibly in preview
 mode.
 
+The server-only `POST /api/research/ingest` endpoint accepts the narrow,
+validated progress contract used by the enrichment worker. It requires all
+three server-only settings below and fails closed when any is absent:
+
+```text
+SUPABASE_SECRET_KEY
+RESEARCH_AGENT_INGEST_TOKEN
+RESEARCH_AGENT_ACTOR_ID
+```
+
+The ingestion route accepts only bounded run/task progress, HTTPS source
+events and candidate evidence. Unknown fields are rejected. These settings
+must never be added to frontend variables or browser code.
+
 ## Project intelligence and Attio links
 
 SiteFinder's richer project listing is built only from data GSD already holds:
