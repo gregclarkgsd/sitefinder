@@ -1,10 +1,11 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Search, MapPin, Map as MapIcon, LocateFixed, MoreHorizontal, ArrowUp, ArrowDown, ArrowUpDown, Star, StickyNote, ExternalLink, X, RefreshCw, Building2, SlidersHorizontal, Phone, Mail, CalendarDays, Bookmark, BarChart3, Users, FolderKanban, ChevronLeft, ChevronRight, CheckSquare, Circle, CheckCircle2, Trash2, Plus, Megaphone } from 'lucide-react';
+import { Search, MapPin, Map as MapIcon, LocateFixed, MoreHorizontal, ArrowUp, ArrowDown, ArrowUpDown, Star, StickyNote, ExternalLink, X, RefreshCw, Building2, SlidersHorizontal, Phone, Mail, CalendarDays, Bookmark, BarChart3, Users, FolderKanban, ChevronLeft, ChevronRight, CheckSquare, Circle, CheckCircle2, Trash2, Plus, Megaphone, Bot } from 'lucide-react';
 import './styles.css';
 import './mobile.css';
 import AuthGate from './AuthGate';
 import { CommunicationTimeline, OutreachPage } from './Outreach';
+import { ResearchAgentPage } from './ResearchAgent';
 import { apiFetch } from './api';
 import { supabase } from './supabase';
 import { projectIdFromSearch, projectSearchUrl } from './projectLinks';
@@ -81,6 +82,7 @@ const navItems = [
   {id:'saved',label:'Saved',icon:Bookmark},
   {id:'tasks',label:'Tasks',icon:CheckSquare},
   {id:'outreach',label:'Outreach',icon:Megaphone},
+  {id:'research',label:'Research Agent',icon:Bot},
   {id:'insights',label:'Insights',icon:BarChart3},
   {id:'contractors',label:'Contractors',icon:Users},
 ];
@@ -215,7 +217,7 @@ function App({session,cloudEnabled}){
       <SelectFilter label="Client" value={draftFilters.client} onChange={client=>updateDraftFilter('client',client)} options={options.clients} allLabel="All clients"/>
       <button className="apply" onClick={applyFilters}><SlidersHorizontal size={16}/> Apply filters</button>
     </aside>}
-    <main className={`${(activeView==='insights'||activeView==='contractors'||activeView==='tasks'||activeView==='outreach')?'wide':''} ${activeView==='map'?'map-main':''}`}>
+    <main className={`${(activeView==='insights'||activeView==='contractors'||activeView==='tasks'||activeView==='outreach'||activeView==='research')?'wide':''} ${activeView==='map'?'map-main':''}`}>
       {(activeView==='projects'||activeView==='saved')&&<><section className="toolbar"><div><strong>{visibleProjects.length.toLocaleString()} {activeView==='saved'?'saved':'active'} projects</strong><button className="icon" onClick={load} aria-label="Refresh projects"><RefreshCw size={16}/></button></div><label className="search"><Search size={18}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search projects, contractors, clients, locations…" aria-label="Search projects"/></label><button className="filter-mobile" onClick={()=>document.querySelector('aside')?.classList.toggle('open')}><SlidersHorizontal size={17}/> Filters</button></section>
         {error&&<div className="notice" role="alert">{error}<button onClick={()=>setError('')}><X size={15}/></button></div>}
         {syncIsStale&&<div className="notice sync-warning" role="alert">CCS data may be out of date. The last successful nightly sync was {new Date(syncStatus.completed_at).toLocaleString('en-GB')}.</div>}
@@ -229,6 +231,7 @@ function App({session,cloudEnabled}){
       {activeView==='insights'&&<Insights projects={projects} saved={saved} contractorStats={contractorStats}/>}
       {activeView==='tasks'&&<TaskDashboard tasks={tasks} projects={projects} openProject={open} toggleTask={toggleTask} deleteTask={deleteTask}/>}
       {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} updateLead={updateOutreach} syncToAttio={syncOutreachToAttio}/>}
+      {activeView==='research'&&<ResearchAgentPage/>}
       {activeView==='contractors'&&<Contractors stats={contractorStats} onSelect={name=>{updateDraftFilter('contractor',name);setFilters(x=>({...x,contractor:name}));goToView('projects')}}/>}
     </main>
     {selected&&<ProjectDrawer className={activeView==='map'?'map-drawer':''} selected={selected} detail={detail} close={closeProject} saved={saved.has(selected.Id)} toggleSave={()=>toggleSave(selected)} note={notes[selected.Id]} addNote={()=>addNote(selected)} meta={history[selected.Id]} attioLink={attioLinks[selected.Id]} enrichment={enrichment[selected.Id]} tracking={tracking[selected.Id]} updateTracking={changes=>updateTracking(selected,changes)} tasks={tasks.filter(task=>task.project_id===selected.Id)} createTask={input=>createTask(selected,input)} toggleTask={toggleTask} deleteTask={deleteTask} outreachLead={outreachLeads.find(lead=>lead.project_id===selected.Id)} queueOutreach={()=>queueOutreach(selected,detail||{})} communications={communications.filter(item=>item.project_id===selected.Id)} logCommunication={channel=>logCommunication(selected,channel)}/>}

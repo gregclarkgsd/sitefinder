@@ -121,6 +121,22 @@ detail record with address, dates and published contact fields.
 Project search accepts start and completion date windows. SiteFinder's
 completion filter includes a dedicated 3–9 month decorating window.
 
+## Research Agent control room
+
+The **Research Agent** tab is an operator-facing control room for the separate
+GSD Sales enrichment service. Its first release is an explicitly labelled
+preview: it demonstrates the company queue, live page activity, Pause/Resume,
+orderly stop requests, evidence inspection and human candidate decisions
+without starting a crawler or writing to Attio.
+
+The production connection must preserve the same boundary:
+
+- research runs, company tasks, source events and candidate decisions are saved;
+- official source URLs and evidence remain visible to the reviewer;
+- candidates require a human decision;
+- approval may queue a candidate for a separately governed Attio write, but
+  never sends email and never writes to Attio from the preview interface.
+
 ## Project intelligence and Attio links
 
 SiteFinder's richer project listing is built only from data GSD already holds:
