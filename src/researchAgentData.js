@@ -26,9 +26,9 @@ export function buildResearchRun({run, tasks = [], events = [], candidates = []}
       progress: task.progress,
       pageCount: task.page_count,
       contactsFound: task.contacts_found,
-      currentUrl: task.current_url || `https://${task.domain}/`,
-      pageTitle: task.page_title || 'Approved public source',
-      currentRole: task.current_role || 'Relevant construction role',
+      currentUrl: task.current_url || null,
+      pageTitle: task.page_title || (task.current_url ? 'Approved public source' : 'Waiting for saved page activity'),
+      currentRole: task.current_role || null,
       lastError: task.last_error,
       startedAt: task.started_at,
       completedAt: task.completed_at,
@@ -87,26 +87,19 @@ export async function loadLatestResearchRun(client) {
   });
 }
 
-export async function updateResearchRunStatus(client, runId, status, userId) {
-  const {error} = await client
-    .from('research_runs')
-    .update({status, updated_by: userId, updated_at: new Date().toISOString()})
-    .eq('id', runId);
+export async function updateResearchRunStatus(client, runId, status) {
+  const {error} = await client.rpc('request_research_run_control', {
+    p_run_id: runId,
+    p_status: status,
+  });
   if (error) throw error;
 }
 
-export async function updateResearchCandidateReview(client, candidateId, decision, userId) {
-  const reviewedAt = new Date().toISOString();
-  const {error} = await client
-    .from('research_candidates')
-    .update({
-      review_status: decision,
-      reviewed_by: userId,
-      reviewed_at: reviewedAt,
-      updated_by: userId,
-      updated_at: reviewedAt,
-    })
-    .eq('id', candidateId);
+export async function updateResearchCandidateReview(client, candidateId, decision) {
+  const {error} = await client.rpc('review_research_candidate', {
+    p_candidate_id: candidateId,
+    p_decision: decision,
+  });
   if (error) throw error;
 }
 

@@ -21,7 +21,7 @@
 .research-metrics>div:last-child{border-right:0}
 .research-metrics span{display:block;color:var(--muted);font-size:10px;font-weight:600}
 .research-metrics strong{display:block;margin-top:4px;font-size:18px}
-.research-workspace{display:grid;grid-template-columns:minmax(205px,.78fr) minmax(420px,1.55fr) minmax(255px,.95fr);flex:1;min-height:560px;background:#fff}
+.research-workspace{display:grid;grid-template-columns:minmax(205px,.78fr) minmax(420px,1.55fr) minmax(255px,.95fr);flex:1;min-height:650px;background:#fff}
 .research-pane{min-width:0;padding:17px 16px;border-right:1px solid var(--line)}
 .research-pane:last-child{border-right:0}
 .research-pane-heading{display:flex;align-items:center;justify-content:space-between;gap:9px;margin-bottom:12px}
@@ -55,7 +55,9 @@
 .research-detection>div{display:flex;flex-direction:column;gap:3px}
 .research-detection b{font-size:11px}
 .research-detection span{font-size:10px}
+.research-detection.neutral{border-left-color:#94a3b8;background:#f1f5f9;color:#475569}
 .research-events{margin-top:13px;padding-top:5px;border-top:1px solid var(--line)}
+.research-event-empty{padding:14px 0;color:var(--muted);font-size:10px}
 .research-event{display:grid;grid-template-columns:52px 8px 1fr;align-items:start;gap:8px;padding:7px 0;color:var(--muted);font-size:10px}
 .research-event>span{font-variant-numeric:tabular-nums}
 .research-event>i{width:6px;height:6px;margin-top:3px;border-radius:50%;background:#94a3b8}
@@ -66,6 +68,11 @@
 .candidate-heading small{margin:0;color:var(--muted);font-size:9px}
 .candidate-heading h3{margin:5px 0 3px;font-size:17px}
 .candidate-heading p{margin:0;font-size:12px}
+.candidate-switcher{display:grid;grid-template-columns:30px minmax(0,1fr) 30px;align-items:end;gap:7px;margin:0 0 12px}
+.candidate-switcher>button{height:31px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--navy)}
+.candidate-switcher label{min-width:0}
+.candidate-switcher label span{display:block;margin-bottom:4px;color:var(--muted);font-size:9px}
+.candidate-switcher select{width:100%;height:31px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--navy);font-size:10px}
 .candidate-facts{display:block;margin:0}
 .candidate-facts>div{display:block;padding:11px 0;border-bottom:1px solid var(--line)}
 .candidate-facts dt{margin-bottom:4px;color:var(--muted);font-size:9px;font-weight:600}
@@ -75,15 +82,17 @@
 .confidence>i{height:6px;flex:1;overflow:hidden;border-radius:999px;background:#e8edf4}
 .confidence>i>em{display:block;height:100%;border-radius:999px;background:var(--orange)}
 .confidence>b{font-size:11px}
-.candidate-actions{display:grid;grid-template-columns:.8fr 1.2fr;gap:8px;margin-top:14px}
+.candidate-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:14px}
 .candidate-actions button{display:flex;align-items:center;justify-content:center;gap:5px;min-height:37px;border-radius:6px;font-weight:700;font-size:10px}
 .candidate-actions .reject{border:1px solid var(--line);background:#fff}
+.candidate-actions .investigate{border:1px solid #f59e0b;background:#fffbeb;color:#92400e}
 .candidate-actions .approve{border:1px solid var(--navy);background:var(--navy);color:#fff}
+.candidate-actions button.selected{box-shadow:0 0 0 2px #f46b2240}
 .research-boundary{display:flex;align-items:flex-start;gap:6px;margin:10px 0 0;color:var(--muted);font-size:9px;line-height:1.45}
 .research-boundary svg{flex:0 0 auto}
 .review-decision{display:grid;grid-template-columns:18px 1fr;gap:7px;margin-top:14px;padding:11px;border-radius:7px;background:#edf9f1;color:#166534;font-size:10px}
-.review-decision button{grid-column:2;justify-self:start;border:0;background:transparent;color:#0b5cab;padding:0;font-size:9px;font-weight:700}
 .review-decision.decision-rejected{background:#fff1f1;color:#991b1b}
+.review-decision.decision-investigate{background:#fffbeb;color:#92400e}
 .research-empty{display:grid;place-items:center;min-height:300px;color:var(--muted);text-align:center}
 .research-empty b{margin-top:8px;color:#334155}
 .research-empty p{max-width:210px;margin:5px 0;line-height:1.5}

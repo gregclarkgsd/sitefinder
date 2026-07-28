@@ -171,86 +171,110 @@ revoke all on public.research_tasks from public, anon, authenticated;
 revoke all on public.research_events from public, anon, authenticated;
 revoke all on public.research_candidates from public, anon, authenticated;
 
-grant select, insert, update on public.research_runs to authenticated;
-grant select, insert, update on public.research_tasks to authenticated;
-grant select, insert on public.research_events to authenticated;
-grant select, insert, update on public.research_candidates to authenticated;
-grant usage, select on sequence public.research_events_id_seq to authenticated;
+grant select on public.research_runs to authenticated;
+grant select on public.research_tasks to authenticated;
+grant select on public.research_events to authenticated;
+grant select on public.research_candidates to authenticated;
 
 create policy "GSD employees read research runs"
 on public.research_runs for select to authenticated
 using (lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com');
 
-create policy "GSD employees create research runs"
-on public.research_runs for insert to authenticated
-with check (
-  lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com'
-  and created_by = (select auth.uid())
-  and updated_by = (select auth.uid())
-);
-
-create policy "GSD employees update research runs"
-on public.research_runs for update to authenticated
-using (lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com')
-with check (
-  lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com'
-  and updated_by = (select auth.uid())
-);
-
 create policy "GSD employees read research tasks"
 on public.research_tasks for select to authenticated
 using (lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com');
-
-create policy "GSD employees create research tasks"
-on public.research_tasks for insert to authenticated
-with check (
-  lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com'
-  and created_by = (select auth.uid())
-  and updated_by = (select auth.uid())
-);
-
-create policy "GSD employees update research tasks"
-on public.research_tasks for update to authenticated
-using (lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com')
-with check (
-  lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com'
-  and updated_by = (select auth.uid())
-);
 
 create policy "GSD employees read research events"
 on public.research_events for select to authenticated
 using (lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com');
 
-create policy "GSD employees create research events"
-on public.research_events for insert to authenticated
-with check (
-  lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com'
-  and created_by = (select auth.uid())
-);
-
 create policy "GSD employees read research candidates"
 on public.research_candidates for select to authenticated
 using (lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com');
 
-create policy "GSD employees create research candidates"
-on public.research_candidates for insert to authenticated
-with check (
-  lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com'
-  and created_by = (select auth.uid())
-  and updated_by = (select auth.uid())
-);
+create function public.request_research_run_control(
+  p_run_id uuid,
+  p_status text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if auth.uid() is null
+    or lower(coalesce(auth.jwt() ->> 'email', ''))
+      not like '%@gsdecorating.com'
+  then
+    raise exception 'Research control access denied';
+  end if;
 
-create policy "GSD employees review research candidates"
-on public.research_candidates for update to authenticated
-using (lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com')
-with check (
-  lower(coalesce((select auth.jwt()) ->> 'email', '')) like '%@gsdecorating.com'
-  and updated_by = (select auth.uid())
-  and (
-    (review_status = 'pending' and reviewed_by is null and reviewed_at is null)
-    or reviewed_by = (select auth.uid())
-  )
-);
+  if p_status not in ('running', 'paused', 'stopping') then
+    raise exception 'Unsupported research control status';
+  end if;
+
+  update public.research_runs
+  set
+    status = p_status,
+    updated_by = auth.uid(),
+    updated_at = now()
+  where id = p_run_id
+    and (
+      (status = 'running' and p_status in ('running', 'paused', 'stopping'))
+      or (status = 'paused' and p_status in ('running', 'paused', 'stopping'))
+      or (status = 'queued' and p_status in ('running', 'paused', 'stopping'))
+    );
+
+  if not found then
+    raise exception 'Research run is not controllable';
+  end if;
+end;
+$$;
+
+create function public.review_research_candidate(
+  p_candidate_id uuid,
+  p_decision text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if auth.uid() is null
+    or lower(coalesce(auth.jwt() ->> 'email', ''))
+      not like '%@gsdecorating.com'
+  then
+    raise exception 'Research review access denied';
+  end if;
+
+  if p_decision not in ('approved', 'rejected', 'investigate') then
+    raise exception 'Unsupported research review decision';
+  end if;
+
+  update public.research_candidates
+  set
+    review_status = p_decision,
+    reviewed_by = auth.uid(),
+    reviewed_at = now(),
+    updated_by = auth.uid(),
+    updated_at = now()
+  where id = p_candidate_id;
+
+  if not found then
+    raise exception 'Research candidate not found';
+  end if;
+end;
+$$;
+
+revoke all on function public.request_research_run_control(uuid, text)
+  from public, anon, authenticated;
+revoke all on function public.review_research_candidate(uuid, text)
+  from public, anon, authenticated;
+grant execute on function public.request_research_run_control(uuid, text)
+  to authenticated;
+grant execute on function public.review_research_candidate(uuid, text)
+  to authenticated;
 
 alter publication supabase_realtime add table public.research_runs;
 alter publication supabase_realtime add table public.research_tasks;

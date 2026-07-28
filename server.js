@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createClient } from '@supabase/supabase-js';
 import { createSiteFinderClient, createSiteFinderMcpServer } from './mcp/sitefinder-mcp.js';
-import { applyResearchIngestMessage } from './research-agent-ingest.js';
+import {
+  applyResearchIngestMessage,
+  parseResearchRunId,
+} from './research-agent-ingest.js';
 
 const app = express();
 const PORT = process.env.PORT || 8787;
@@ -249,6 +252,28 @@ app.post('/api/research/ingest', requireResearchIngestAuth, async (req, res) => 
         ? 'Invalid research event'
         : 'Research event could not be saved',
     });
+  }
+});
+
+app.get('/api/research/runs/:runId/control', requireResearchIngestAuth, async (req, res) => {
+  let runId;
+  try {
+    runId = parseResearchRunId(req.params.runId);
+  } catch {
+    return res.status(400).json({error: 'Invalid research run identifier'});
+  }
+  try {
+    const {data, error} = await researchAdminClient
+      .from('research_runs')
+      .select('status')
+      .eq('id', runId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({error: 'Research run not found'});
+    res.set('Cache-Control', 'no-store');
+    return res.json({status: data.status});
+  } catch {
+    return res.status(503).json({error: 'Research control state is unavailable'});
   }
 });
 

@@ -22,7 +22,7 @@ const runUpsert = z.object({
     pagesInspected: z.number().int().nonnegative().default(0),
     peopleFound: z.number().int().nonnegative().default(0),
     configuration: z.record(z.string(), z.unknown()).default({}),
-    startedAt: z.iso.datetime().optional(),
+    startedAt: z.iso.datetime(),
   }).strict(),
 }).strict();
 
@@ -105,6 +105,10 @@ export function parseResearchIngestMessage(value) {
   return messageSchema.parse(value);
 }
 
+export function parseResearchRunId(value) {
+  return uuid.parse(value);
+}
+
 function optionalFields(values) {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined));
 }
@@ -127,7 +131,7 @@ export async function applyResearchIngestMessage(client, rawMessage, actorId) {
       pages_inspected: run.pagesInspected,
       people_found: run.peopleFound,
       configuration: run.configuration,
-      started_at: run.startedAt || now,
+      started_at: run.startedAt,
       created_by: actorId,
       updated_by: actorId,
       updated_at: now,

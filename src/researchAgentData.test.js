@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {buildResearchRun} from './researchAgentData.js';
+import {
+  buildResearchRun,
+  updateResearchCandidateReview,
+  updateResearchRunStatus,
+} from './researchAgentData.js';
 
 test('maps persisted research rows into the control-room model', () => {
   const result = buildResearchRun({
@@ -55,11 +59,34 @@ test('maps persisted research rows into the control-room model', () => {
   });
 
   assert.equal(result.mode, 'read_only');
-  assert.equal(result.tasks[0].currentUrl, 'https://example.com/');
+  assert.equal(result.tasks[0].currentUrl, null);
+  assert.equal(result.tasks[0].currentRole, null);
   assert.equal(result.events[0].message, 'Opened a public team page.');
   assert.equal(result.candidates[0].confidence, 0.91);
 });
 
 test('returns null when no saved run exists', () => {
   assert.equal(buildResearchRun({run: null}), null);
+});
+
+test('uses governed RPCs for runner controls and candidate decisions', async () => {
+  const calls = [];
+  const client = {
+    rpc: async (name, input) => {
+      calls.push({name, input});
+      return {error: null};
+    },
+  };
+  await updateResearchRunStatus(client, 'run-1', 'paused');
+  await updateResearchCandidateReview(client, 'candidate-1', 'approved');
+  assert.deepEqual(calls, [
+    {
+      name: 'request_research_run_control',
+      input: {p_run_id: 'run-1', p_status: 'paused'},
+    },
+    {
+      name: 'review_research_candidate',
+      input: {p_candidate_id: 'candidate-1', p_decision: 'approved'},
+    },
+  ]);
 });

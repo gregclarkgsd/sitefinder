@@ -115,6 +115,34 @@ export function createPreviewResearchRun() {
         reviewStatus: 'pending',
       },
       {
+        id: 'preview-galliford-candidate-2',
+        taskId: 'galliford',
+        name: 'Illustrative candidate two',
+        jobTitle: 'Senior Quantity Surveyor',
+        roleCategory: 'Quantity surveying',
+        sourceKind: 'Official company people page',
+        sourceUrl: 'https://www.gallifordtry.co.uk/',
+        evidence: 'The public page associates this person with a relevant quantity-surveying role.',
+        crmComparison: 'No exact company/name match',
+        emailStatus: 'No public personal email found',
+        confidence: 0.89,
+        reviewStatus: 'pending',
+      },
+      {
+        id: 'preview-galliford-candidate-3',
+        taskId: 'galliford',
+        name: 'Illustrative candidate three',
+        jobTitle: 'Procurement Manager',
+        roleCategory: 'Procurement',
+        sourceKind: 'Official company people page',
+        sourceUrl: 'https://www.gallifordtry.co.uk/',
+        evidence: 'The public page associates this person with a relevant procurement role.',
+        crmComparison: 'Possible existing person · needs human confirmation',
+        emailStatus: 'No public personal email found',
+        confidence: 0.84,
+        reviewStatus: 'pending',
+      },
+      {
         id: 'preview-bowmer-candidate',
         taskId: 'bowmer',
         name: 'Illustrative candidate',
@@ -133,7 +161,7 @@ export function createPreviewResearchRun() {
 }
 
 export function pendingReviewCount(run) {
-  return run.candidates.filter(candidate => candidate.reviewStatus === 'pending').length;
+  return run.candidates.filter(candidate => ['pending', 'investigate'].includes(candidate.reviewStatus)).length;
 }
 
 export function setRunStatus(run, status) {
@@ -141,6 +169,13 @@ export function setRunStatus(run, status) {
     throw new Error(`Unsupported research run status: ${status}`);
   }
   return {...run, status};
+}
+
+export function primaryRunControl(status) {
+  if (status === 'queued') return {status: 'running', label: 'Start'};
+  if (status === 'paused') return {status: 'running', label: 'Resume'};
+  if (status === 'running') return {status: 'paused', label: 'Pause'};
+  return null;
 }
 
 export function requestStopAfterCurrent(run) {

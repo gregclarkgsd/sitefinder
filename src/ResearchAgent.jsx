@@ -2,6 +2,7 @@ import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {
   Bot,
   Check,
+  ChevronLeft,
   ChevronRight,
   CircleStop,
   ExternalLink,
@@ -19,6 +20,7 @@ import {
   advancePreviewRun,
   createPreviewResearchRun,
   pendingReviewCount,
+  primaryRunControl,
   requestStopAfterCurrent,
   researchEventSteps,
   reviewCandidate,
@@ -51,7 +53,7 @@ const emptyTask = {
   contactsFound: 0,
   pageTitle: 'Waiting for the research runner',
   currentUrl: '',
-  currentRole: 'Relevant construction role',
+  currentRole: '',
   currentStep: 0,
 };
 
@@ -95,7 +97,7 @@ function CompanyQueue({tasks, selectedTaskId, onSelect}) {
   </section>;
 }
 
-function BrowserPreview({task, runStatus, events = []}) {
+function BrowserPreview({task, runStatus, events = [], preview = false}) {
   const liveEvents = events.filter(event => event.taskId === task.id).slice(-6);
   const previewEvents = researchEventSteps
     .slice(0, Math.max(1, (task.currentStep || 0) + 1))
@@ -104,7 +106,7 @@ function BrowserPreview({task, runStatus, events = []}) {
       message,
       createdAt: Date.now() - (rows.length - index) * 7000,
     }));
-  const visibleEvents = liveEvents.length ? liveEvents : previewEvents;
+  const visibleEvents = liveEvents.length ? liveEvents : preview ? previewEvents : [];
   return <section className="research-pane research-live" aria-label="Live research activity">
     <div className="research-pane-heading">
       <div><span>Current task</span><h2>Live research view</h2></div>
@@ -123,14 +125,22 @@ function BrowserPreview({task, runStatus, events = []}) {
           <span>About&nbsp;&nbsp; Projects&nbsp;&nbsp; People&nbsp;&nbsp; Contact</span>
         </div>
         <h3>{task.pageTitle}</h3>
-        <p>The research agent is examining this approved public source and retaining the exact URL as evidence.</p>
-        <div className="research-detection">
-          <SearchCheck size={18}/>
-          <div><b>Relevant role detected</b><span>Illustrative result · {task.currentRole}</span></div>
-        </div>
+        <p>{task.currentUrl
+          ? 'The research agent is examining this approved public source and retaining the exact URL as evidence.'
+          : 'The runner has not saved a public page for this task yet.'}</p>
+        {task.currentRole
+          ? <div className="research-detection">
+              <SearchCheck size={18}/>
+              <div><b>Relevant role detected</b><span>{preview ? 'Illustrative result' : 'Live saved result'} · {task.currentRole}</span></div>
+            </div>
+          : <div className="research-detection neutral">
+              <FileSearch size={18}/>
+              <div><b>No saved role yet</b><span>Waiting for evidence from an approved public source</span></div>
+            </div>}
       </div>
     </div>
     <div className="research-events" aria-live="polite">
+      {visibleEvents.length === 0 && <div className="research-event-empty">No saved activity for this task yet.</div>}
       {visibleEvents.map((event, index) => <div className={`research-event ${index === visibleEvents.length - 1 ? 'current' : ''}`} key={event.id}>
         <span>{formatTime(event.createdAt)}</span>
         <i/>
@@ -140,19 +150,46 @@ function BrowserPreview({task, runStatus, events = []}) {
   </section>;
 }
 
-function CandidateInspector({candidate, companyName, onReview}) {
+function CandidateInspector({
+  candidate,
+  candidates,
+  companyName,
+  onReview,
+  onSelectCandidate,
+  preview = false,
+}) {
   if (!candidate) return <section className="research-pane research-inspector" aria-label="Candidate inspector">
     <div className="research-pane-heading"><div><span>Evidence</span><h2>Candidate inspector</h2></div></div>
     <div className="research-empty"><FileSearch/><b>No candidate selected</b><p>Choose a company with discovered people to review its evidence.</p></div>
   </section>;
   const decided = candidate.reviewStatus !== 'pending';
+  const candidateIndex = candidates.findIndex(item => item.id === candidate.id);
+  const confidenceLabel = candidate.confidence >= 0.85
+    ? 'High confidence'
+    : candidate.confidence >= 0.65
+      ? 'Medium confidence'
+      : 'Low confidence';
+  const selectCandidate = offset => {
+    const next = (candidateIndex + offset + candidates.length) % candidates.length;
+    onSelectCandidate(candidates[next].id);
+  };
   return <section className="research-pane research-inspector" aria-label="Candidate inspector">
     <div className="research-pane-heading">
       <div><span>Evidence</span><h2>Candidate inspector</h2></div>
-      <b className="confidence-label">High confidence</b>
+      <b className="confidence-label">{confidenceLabel}</b>
     </div>
+    {candidates.length > 1 && <div className="candidate-switcher">
+      <button type="button" onClick={() => selectCandidate(-1)} aria-label="Previous candidate"><ChevronLeft size={14}/></button>
+      <label>
+        <span>Candidate {candidateIndex + 1} of {candidates.length}</span>
+        <select value={candidate.id} onChange={event => onSelectCandidate(event.target.value)}>
+          {candidates.map(item => <option value={item.id} key={item.id}>{item.name} · {item.jobTitle}</option>)}
+        </select>
+      </label>
+      <button type="button" onClick={() => selectCandidate(1)} aria-label="Next candidate"><ChevronRight size={14}/></button>
+    </div>}
     <div className="candidate-heading">
-      <small>Illustrative candidate</small>
+      <small>{preview ? 'Illustrative candidate' : 'Saved research candidate'}</small>
       <h3>{candidate.name}</h3>
       <p>{candidate.jobTitle}</p>
     </div>
@@ -164,12 +201,12 @@ function CandidateInspector({candidate, companyName, onReview}) {
       <div><dt>Evidence</dt><dd>{candidate.evidence}</dd></div>
       <div><dt>Confidence</dt><dd className="confidence"><i><em style={{width: `${candidate.confidence * 100}%`}}/></i><b>{Math.round(candidate.confidence * 100)}%</b></dd></div>
     </dl>
-    {decided
-      ? <div className={`review-decision decision-${candidate.reviewStatus}`}><Check size={17}/><span>Marked {candidate.reviewStatus}. This preview has not changed Attio.</span><button type="button" onClick={() => onReview('investigate')}>Change decision</button></div>
-      : <div className="candidate-actions">
-        <button type="button" className="reject" onClick={() => onReview('rejected')}><X size={15}/> Reject</button>
-        <button type="button" className="approve" onClick={() => onReview('approved')}><Check size={15}/> Approve for Attio queue</button>
-      </div>}
+    {decided && <div className={`review-decision decision-${candidate.reviewStatus}`}><Check size={17}/><span>Marked {candidate.reviewStatus}. This decision has not changed Attio.</span></div>}
+    <div className="candidate-actions">
+      <button type="button" className={`reject ${candidate.reviewStatus === 'rejected' ? 'selected' : ''}`} onClick={() => onReview('rejected')}><X size={15}/> Reject</button>
+      <button type="button" className={`investigate ${candidate.reviewStatus === 'investigate' ? 'selected' : ''}`} onClick={() => onReview('investigate')}><SearchCheck size={15}/> Investigate</button>
+      <button type="button" className={`approve ${candidate.reviewStatus === 'approved' ? 'selected' : ''}`} onClick={() => onReview('approved')}><Check size={15}/> Approve</button>
+    </div>
     <p className="research-boundary"><ShieldCheck size={15}/> Approval creates a review decision only. It does not write to Attio or send an email.</p>
   </section>;
 }
@@ -180,9 +217,18 @@ export function ResearchAgentPage({cloudEnabled = false, session = null}) {
   const [dataState, setDataState] = useState('preview');
   const [dataError, setDataError] = useState('');
   const [working, setWorking] = useState(false);
+  const [selectedCandidateId, setSelectedCandidateId] = useState('');
   const selectedTask = useMemo(() => run.tasks.find(task => task.id === selectedTaskId) || run.tasks[0] || emptyTask, [run.tasks, selectedTaskId]);
-  const candidate = run.candidates.find(item => item.taskId === selectedTask.id) || null;
+  const taskCandidates = useMemo(() => run.candidates.filter(item => item.taskId === selectedTask.id), [run.candidates, selectedTask.id]);
+  const candidate = taskCandidates.find(item => item.id === selectedCandidateId) || taskCandidates[0] || null;
   const reviewCount = pendingReviewCount(run);
+  const primaryControl = primaryRunControl(run.status);
+
+  useEffect(() => {
+    setSelectedCandidateId(current => taskCandidates.some(item => item.id === current)
+      ? current
+      : taskCandidates[0]?.id || '');
+  }, [taskCandidates]);
 
   const loadSavedRun = useCallback(async () => {
     if (!cloudEnabled || !supabase) return null;
@@ -228,7 +274,7 @@ export function ResearchAgentPage({cloudEnabled = false, session = null}) {
     if (!session?.user?.id || !supabase) return;
     setWorking(true);
     try {
-      await updateResearchRunStatus(supabase, run.id, status, session.user.id);
+      await updateResearchRunStatus(supabase, run.id, status);
       setRun(current => ({...current, status}));
       setDataError('');
     } catch (error) {
@@ -237,7 +283,9 @@ export function ResearchAgentPage({cloudEnabled = false, session = null}) {
       setWorking(false);
     }
   };
-  const togglePause = () => changeRunStatus(run.status === 'paused' ? 'running' : 'paused');
+  const togglePause = () => {
+    if (primaryControl) changeRunStatus(primaryControl.status);
+  };
   const stopAfterCurrent = async () => {
     if (dataState !== 'live') {
       setRun(current => requestStopAfterCurrent(current));
@@ -263,7 +311,7 @@ export function ResearchAgentPage({cloudEnabled = false, session = null}) {
     if (!session?.user?.id || !supabase) return;
     setWorking(true);
     try {
-      await updateResearchCandidateReview(supabase, candidate.id, decision, session.user.id);
+      await updateResearchCandidateReview(supabase, candidate.id, decision);
       setRun(current => reviewCandidate(current, candidate.id, decision));
       setDataError('');
     } catch (error) {
@@ -283,9 +331,9 @@ export function ResearchAgentPage({cloudEnabled = false, session = null}) {
         </div>
       </div>
       <div className="research-command-actions">
-        <button type="button" onClick={togglePause} disabled={working || run.status === 'stopping' || run.status === 'completed'}>
-          {run.status === 'paused' ? <Play size={15}/> : <Pause size={15}/>}
-          {run.status === 'paused' ? 'Resume' : 'Pause'}
+        <button type="button" onClick={togglePause} disabled={working || !primaryControl}>
+          {primaryControl?.status === 'running' ? <Play size={15}/> : <Pause size={15}/>}
+          {primaryControl?.label || 'No run control'}
         </button>
         <button type="button" onClick={stopAfterCurrent} disabled={working || run.stopAfterCurrent || run.status === 'stopping' || run.status === 'completed'}>
           <CircleStop size={15}/> {run.stopAfterCurrent || run.status === 'stopping' ? 'Stop requested' : 'Stop after current company'}
@@ -303,8 +351,15 @@ export function ResearchAgentPage({cloudEnabled = false, session = null}) {
 
     <div className="research-workspace">
       <CompanyQueue tasks={run.tasks} selectedTaskId={selectedTask.id} onSelect={setSelectedTaskId}/>
-      <BrowserPreview task={selectedTask} runStatus={run.status} events={run.events}/>
-      <CandidateInspector candidate={candidate} companyName={selectedTask.companyName} onReview={decide}/>
+      <BrowserPreview task={selectedTask} runStatus={run.status} events={run.events} preview={dataState !== 'live'}/>
+      <CandidateInspector
+        candidate={candidate}
+        candidates={taskCandidates}
+        companyName={selectedTask.companyName}
+        onReview={decide}
+        onSelectCandidate={setSelectedCandidateId}
+        preview={dataState !== 'live'}
+      />
     </div>
     <div className={`research-preview-notice ${dataState === 'live' ? 'live' : ''}`}><Bot size={15}/><span>{dataState === 'live' ? 'Showing the latest saved read-only run. Task, event and candidate changes update automatically.' : 'This working page uses illustrative activity while the live research runner is connected. All controls are safely contained in preview mode.'}{dataError ? ` Live data note: ${dataError}` : ''}</span><button type="button" onClick={reset}><RefreshCw size={14}/> {dataState === 'live' ? 'Refresh' : 'Reset preview'}</button></div>
   </div>;

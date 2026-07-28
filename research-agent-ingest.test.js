@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {parseResearchIngestMessage} from './research-agent-ingest.js';
+import {
+  parseResearchIngestMessage,
+  parseResearchRunId,
+} from './research-agent-ingest.js';
 
 const runId = '11111111-1111-4111-8111-111111111111';
 const taskId = '22222222-2222-4222-8222-222222222222';
@@ -14,6 +17,7 @@ test('accepts a bounded read-only run message', () => {
       source: 'attio',
       status: 'running',
       companyLimit: 50,
+      startedAt: '2026-07-28T09:00:00.000Z',
     },
   });
   assert.equal(message.run.companyLimit, 50);
@@ -57,7 +61,13 @@ test('rejects unknown event fields and oversized runs', () => {
       source: 'attio',
       status: 'running',
       companyLimit: 500,
+      startedAt: '2026-07-28T09:00:00.000Z',
       attioToken: 'must never be accepted',
     },
   }));
+});
+
+test('accepts only a valid UUID for research control lookups', () => {
+  assert.equal(parseResearchRunId(runId), runId);
+  assert.throws(() => parseResearchRunId('../research_runs'));
 });
