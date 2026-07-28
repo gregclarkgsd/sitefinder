@@ -1,5 +1,4 @@
 import express from 'express';
-import { createHash, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -20,8 +19,6 @@ const supabaseUrl = process.env.VITE_SUPABASE_URL;
 const supabaseKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 const siteFinderOrigin = String(process.env.SITEFINDER_URL || 'https://gsd-sitefinder.onrender.com').replace(/\/+$/, '');
 const oauthIssuer = supabaseUrl ? `${supabaseUrl.replace(/\/+$/, '')}/auth/v1` : null;
-const mcpTokenHash = process.env.SITEFINDER_MCP_TOKEN_SHA256
-  || 'a536da901c6ba6c3cf18a33b049a1c274013d5574dd0349a70fe47a0cdc36954';
 const authClient = supabaseUrl && supabaseKey
   ? createClient(supabaseUrl, supabaseKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
@@ -36,13 +33,6 @@ app.use(express.json({ limit: '1mb' }));
 function bearerToken(req) {
   const header = String(req.get('authorization') || '');
   return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-}
-
-function tokenHashMatches(candidate, expectedHash) {
-  if (!candidate || !expectedHash) return false;
-  const left = Buffer.from(createHash('sha256').update(String(candidate)).digest('hex'));
-  const right = Buffer.from(String(expectedHash));
-  return left.length === right.length && left.length > 0 && timingSafeEqual(left, right);
 }
 
 function isLocalPreview(req) {
@@ -64,12 +54,6 @@ async function requireSiteFinderAuth(req, res, next) {
   }
 
   const token = bearerToken(req);
-  if (tokenHashMatches(token, mcpTokenHash)) {
-    req.siteFinderAuth = { type: 'mcp', email: 'sitefinder-mcp' };
-    req.siteFinderToken = token;
-    return next();
-  }
-
   if (!token || !authClient) {
     setAuthChallenge(res);
     return res.status(401).json({ error: 'Authentication required' });
