@@ -109,6 +109,31 @@ To inspect recent public procurement notices, add a bounded window:
 --procurement-days 30
 ```
 
+### Watch a run in SiteFinder
+
+The crawler can send safe progress events to the Research Agent control room
+while keeping the full private output in this workspace:
+
+```bash
+npm run enrich -- \
+  --input .private/snapshots/attio/companies.json \
+  --limit 50 \
+  --publish-progress \
+  --run-name "Daily company research"
+```
+
+Set `RESEARCH_AGENT_INGEST_URL` and `RESEARCH_AGENT_INGEST_TOKEN` first. The
+progress feed contains company names, public source URLs, job titles and
+email-availability status. It never sends the bearer token in the payload,
+evidence sentences, or personal email or telephone values.
+
+This updates only the SiteFinder run viewer. It does not create or update
+Attio or Pipedrive records, and discovered candidates still require a person
+to approve or reject them.
+
+Visible control-room runs process one company at a time so Pause and
+Stop-after-current have exact, predictable meaning.
+
 Runs over 250 companies require the explicit safety flag
 `--confirm-large-run=YES`.
 

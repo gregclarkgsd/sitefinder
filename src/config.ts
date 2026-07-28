@@ -13,6 +13,8 @@ const environmentSchema = z.object({
   PIPEDRIVE_API_TOKEN: optionalSecret,
   PIPEDRIVE_API_DOMAIN: z.url().default("https://api.pipedrive.com"),
   COMPANIES_HOUSE_API_KEY: optionalSecret,
+  RESEARCH_AGENT_INGEST_URL: z.url().optional(),
+  RESEARCH_AGENT_INGEST_TOKEN: optionalSecret,
   CRAWLER_CONTACT_URL: z.url().default("https://www.gsdecorating.com/"),
   CRAWLER_MAX_PAGES: positiveInteger.default(12),
   CRAWLER_MAX_PDFS: nonNegativeInteger.default(3),
@@ -25,6 +27,8 @@ export interface AppConfig {
   pipedriveToken?: string;
   pipedriveApiDomain: string;
   companiesHouseApiKey?: string;
+  researchAgentIngestUrl?: string;
+  researchAgentIngestToken?: string;
   crawler: {
     contactUrl: string;
     maxPages: number;
@@ -47,6 +51,12 @@ export function loadConfig(
     pipedriveApiDomain: parsed.PIPEDRIVE_API_DOMAIN,
     ...(parsed.COMPANIES_HOUSE_API_KEY
       ? { companiesHouseApiKey: parsed.COMPANIES_HOUSE_API_KEY }
+      : {}),
+    ...(parsed.RESEARCH_AGENT_INGEST_URL
+      ? { researchAgentIngestUrl: parsed.RESEARCH_AGENT_INGEST_URL }
+      : {}),
+    ...(parsed.RESEARCH_AGENT_INGEST_TOKEN
+      ? { researchAgentIngestToken: parsed.RESEARCH_AGENT_INGEST_TOKEN }
       : {}),
     crawler: {
       contactUrl: parsed.CRAWLER_CONTACT_URL,

@@ -25,6 +25,15 @@ export interface CrawlOptions {
   userAgent: string;
   fetchImpl?: typeof fetch;
   now?: () => Date;
+  onProgress?: (
+    event: CrawlProgressEvent,
+  ) => Promise<"continue" | "stop" | void>;
+}
+
+export interface CrawlProgressEvent {
+  kind: "robots" | "page" | "pdf";
+  message: string;
+  sourceUrl: string;
 }
 
 const EMPTY_WEBSITE: WebsiteSignal = {
@@ -142,6 +151,7 @@ async function readRobots(
 ): Promise<{
   isAllowed: (url: string) => boolean;
   sitemaps: string[];
+  rulesStatus: "allowed" | "missing" | "blocked";
 }> {
   const robotsUrl = new URL("/robots.txt", root);
   try {
@@ -149,10 +159,20 @@ async function readRobots(
       robotsUrl,
       createFetchOptions(options, 1_000_000, domain),
     );
-    if (response.status === 404) return { isAllowed: () => true, sitemaps: [] };
+    if (response.status === 404) {
+      return {
+        isAllowed: () => true,
+        sitemaps: [],
+        rulesStatus: "missing",
+      };
+    }
     if (response.status < 200 || response.status >= 300) {
       warnings.push(`robots.txt returned HTTP ${response.status}`);
-      return { isAllowed: () => false, sitemaps: [] };
+      return {
+        isAllowed: () => false,
+        sitemaps: [],
+        rulesStatus: "blocked",
+      };
     }
     const text = decodeUtf8(response.body);
     const parsed = robotsParser(robotsUrl.toString(), text);
@@ -164,12 +184,17 @@ async function readRobots(
     return {
       isAllowed: (url) => parsed.isAllowed(url, options.userAgent) !== false,
       sitemaps,
+      rulesStatus: "allowed",
     };
   } catch (error) {
     warnings.push(
       `robots.txt unavailable: ${error instanceof Error ? error.message : "unknown error"}`,
     );
-    return { isAllowed: () => false, sitemaps: [] };
+    return {
+      isAllowed: () => false,
+      sitemaps: [],
+      rulesStatus: "blocked",
+    };
   }
 }
 
@@ -210,15 +235,32 @@ export async function crawlCompanyWebsite(
     );
   }
   const robots = await readRobots(root, options, warnings, domain);
+  const robotsDecision = await options.onProgress?.({
+    kind: "robots",
+    message: {
+      allowed:
+        "Checked the website rules and confirmed the allowed public paths.",
+      missing:
+        "No website rules file was published; standard public-page access applies.",
+      blocked: "Website rules were unavailable, so the crawl stopped safely.",
+    }[robots.rulesStatus],
+    sourceUrl: new URL("/robots.txt", root).toString(),
+  });
+  let controlStopped = robotsDecision === "stop";
+  if (controlStopped) {
+    warnings.push("Research run was cancelled by the operator.");
+  }
   const candidates = new Map<string, number>();
   const queuedPdfs = new Set<string>();
   const seen = new Set<string>();
   candidates.set(root.toString(), pageScore(root.toString()));
 
-  const sitemapQueue = mergeUnique(
-    robots.sitemaps,
-    [new URL("/sitemap.xml", root).toString()],
-  ).filter((url) => robots.isAllowed(url));
+  const sitemapQueue = controlStopped
+    ? []
+    : mergeUnique(
+        robots.sitemaps,
+        [new URL("/sitemap.xml", root).toString()],
+      ).filter((url) => robots.isAllowed(url));
   const seenSitemaps = new Set<string>();
   while (sitemapQueue.length > 0 && seenSitemaps.size < 8) {
     const sitemapUrl = sitemapQueue.shift();
@@ -262,7 +304,7 @@ export async function crawlCompanyWebsite(
     lastRequestAt = Date.now();
   };
 
-  while (pagesVisited.length < options.maxPages) {
+  while (!controlStopped && pagesVisited.length < options.maxPages) {
     const next = [...candidates.entries()]
       .filter(([url]) => !seen.has(url))
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
@@ -276,6 +318,16 @@ export async function crawlCompanyWebsite(
 
     await waitForRateLimit();
     try {
+      const decision = await options.onProgress?.({
+        kind: "page",
+        message: "Opening an approved public company page.",
+        sourceUrl: url,
+      });
+      if (decision === "stop") {
+        controlStopped = true;
+        warnings.push("Research run was cancelled by the operator.");
+        break;
+      }
       const response = await fetchPublicResource(
         url,
         createFetchOptions(options, 5_000_000, domain),
@@ -320,13 +372,23 @@ export async function crawlCompanyWebsite(
 
   let parsedPdfs = 0;
   for (const url of [...queuedPdfs].sort((a, b) => pageScore(b) - pageScore(a))) {
-    if (parsedPdfs >= options.maxPdfs) break;
+    if (controlStopped || parsedPdfs >= options.maxPdfs) break;
     if (!robots.isAllowed(url)) {
       pagesSkipped.push({ url, reason: "blocked_by_robots" });
       continue;
     }
     await waitForRateLimit();
     try {
+      const decision = await options.onProgress?.({
+        kind: "pdf",
+        message: "Reading an approved public company PDF.",
+        sourceUrl: url,
+      });
+      if (decision === "stop") {
+        controlStopped = true;
+        warnings.push("Research run was cancelled by the operator.");
+        break;
+      }
       const response = await fetchPublicResource(
         url,
         createFetchOptions(options, 12_000_000, domain),

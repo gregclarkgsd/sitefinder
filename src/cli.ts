@@ -11,6 +11,7 @@ import {
   writePrivateJson,
 } from "./io/private-files.js";
 import { writeEnrichmentRun } from "./io/run-output.js";
+import { SiteFinderProgressPublisher } from "./observability/sitefinder-progress.js";
 import { enrichCompanies } from "./pipeline/enrich.js";
 import { CompaniesHouseReader } from "./public-data/companies-house.js";
 import { reconcilePeople } from "./reconcile.js";
@@ -121,6 +122,15 @@ function rejectWriteFlags(args: Arguments): void {
       `--${requested} is unavailable: Phase 1 is structurally read-only`,
     );
   }
+}
+
+function researchSource(
+  companies: Array<{ source: "attio" | "pipedrive" | "file" }>,
+): "attio" | "pipedrive" | "file" {
+  const first = companies[0]?.source;
+  return first && companies.every((company) => company.source === first)
+    ? first
+    : "file";
 }
 
 async function snapshotAttio(args: Arguments): Promise<void> {
@@ -288,39 +298,81 @@ async function enrich(args: Arguments): Promise<void> {
     min: 0,
     max: 10,
   });
-  const concurrency = integerFlag(args, "concurrency", 2, {
+  const publishProgress = enabled(args, "publish-progress");
+  const concurrency = integerFlag(args, "concurrency", publishProgress ? 1 : 2, {
     min: 1,
-    max: 4,
+    max: publishProgress ? 1 : 4,
   });
   const procurementDays = integerFlag(args, "procurement-days", 0, {
     min: 0,
     max: 365,
   });
+  const runName = (
+    flag(args, "run-name", { fallback: "Main contractor research" }) ?? ""
+  ).trim();
+  if (!runName || runName.length > 120) {
+    throw new Error("--run-name must be between 1 and 120 characters");
+  }
+  const progress = publishProgress
+    ? new SiteFinderProgressPublisher({
+        endpoint: requireSecret(
+          config.researchAgentIngestUrl,
+          "RESEARCH_AGENT_INGEST_URL",
+        ),
+        token: requireSecret(
+          config.researchAgentIngestToken,
+          "RESEARCH_AGENT_INGEST_TOKEN",
+        ),
+      })
+    : undefined;
 
   await withOutputLock(output, async () => {
-    const run = await enrichCompanies(selected, {
-      crawl: {
-        maxPages,
-        maxPdfs,
-        delayMs: config.crawler.delayMs,
-        timeoutMs: config.crawler.timeoutMs,
-        userAgent: config.crawler.userAgent,
-      },
-      concurrency,
-      ...(companiesHouse ? { companiesHouse } : {}),
-      procurementDays,
-    });
-    await writeEnrichmentRun(output, run);
-    console.log(
-      JSON.stringify({
-        mode: run.mode,
-        companies: run.companyCount,
-        contacts: run.contactCount,
-        evidence: run.evidenceCount,
-        projectSignals: run.projectSignalCount,
-        output: relative(process.cwd(), output),
-      }),
-    );
+    try {
+      await progress?.start({
+        name: runName,
+        source: researchSource(selected),
+        companies: selected,
+        configuration: {
+          maxPages,
+          maxPdfs,
+          concurrency,
+          procurementDays,
+          companiesHouse: Boolean(companiesHouse),
+        },
+      });
+      const run = await enrichCompanies(selected, {
+        crawl: {
+          maxPages,
+          maxPdfs,
+          delayMs: config.crawler.delayMs,
+          timeoutMs: config.crawler.timeoutMs,
+          userAgent: config.crawler.userAgent,
+        },
+        concurrency,
+        ...(companiesHouse ? { companiesHouse } : {}),
+        procurementDays,
+        ...(progress
+          ? { onProgress: (event) => progress.publish(event) }
+          : {}),
+      });
+      await writeEnrichmentRun(output, run);
+      await progress?.complete(run);
+      console.log(
+        JSON.stringify({
+          mode: run.mode,
+          companies: run.companyCount,
+          contacts: run.contactCount,
+          evidence: run.evidenceCount,
+          projectSignals: run.projectSignalCount,
+          progressPublished: Boolean(progress),
+          progressFailures: progress?.failureCount ?? 0,
+          output: relative(process.cwd(), output),
+        }),
+      );
+    } catch (error) {
+      await progress?.fail(error);
+      throw error;
+    }
   });
 }
 
@@ -339,7 +391,10 @@ Examples:
   npm run reconcile -- --attio-people .private/snapshots/attio/people.json \\
     --pipedrive-people .private/snapshots/pipedrive/people.json
   npm run enrich -- --input .private/snapshots/attio/companies.json --limit 50
+  npm run enrich -- --input .private/snapshots/attio/companies.json --limit 50 \\
+    --publish-progress --run-name "Daily company research"
 
+The optional progress feed updates SiteFinder's Research Agent control room.
 CRM write flags are intentionally unsupported.`);
 }
 

@@ -4,7 +4,11 @@ import type {
   Evidence,
   ProjectSignal,
 } from "../types.js";
-import { crawlCompanyWebsite, type CrawlOptions } from "../crawler/crawl.js";
+import {
+  crawlCompanyWebsite,
+  type CrawlOptions,
+  type CrawlProgressEvent,
+} from "../crawler/crawl.js";
 import { CompaniesHouseReader } from "../public-data/companies-house.js";
 import {
   fetchContractsFinderReleases,
@@ -18,7 +22,26 @@ export interface EnrichmentOptions {
   companiesHouse?: CompaniesHouseReader;
   procurementDays: number;
   fetchImpl?: typeof fetch;
+  onProgress?: (
+    event: EnrichmentProgressEvent,
+  ) => Promise<EnrichmentProgressDecision | void>;
 }
+
+export type EnrichmentProgressDecision = "continue" | "stop";
+
+export type EnrichmentProgressEvent =
+  | { kind: "company_started"; company: CompanySeed }
+  | { kind: "company_skipped"; company: CompanySeed; reason: string }
+  | {
+      kind: "crawl";
+      company: CompanySeed;
+      crawl: CrawlProgressEvent;
+    }
+  | {
+      kind: "company_completed";
+      company: CompanySeed;
+      result: EnrichedCompany;
+    };
 
 export interface EnrichmentRun {
   mode: "read_only";
@@ -93,13 +116,49 @@ export async function enrichCompanies(
   options: EnrichmentOptions,
 ): Promise<EnrichmentRun> {
   const startedAt = new Date().toISOString();
+  let stopRequested = false;
   const results = await workerPool(
     companies,
     options.concurrency,
     async (company) => {
       let result: EnrichedCompany;
+      if (stopRequested) {
+        const reason = "Skipped after the operator requested a safe stop.";
+        await options.onProgress?.({
+          kind: "company_skipped",
+          company,
+          reason,
+        });
+        return emptyResult(company, reason);
+      }
       try {
-        result = await crawlCompanyWebsite(company, options.crawl);
+        const decision = await options.onProgress?.({
+          kind: "company_started",
+          company,
+        });
+        if (decision === "stop") {
+          stopRequested = true;
+          const reason = "Skipped after the operator requested a safe stop.";
+          await options.onProgress?.({
+            kind: "company_skipped",
+            company,
+            reason,
+          });
+          return emptyResult(company, reason);
+        }
+        result = await crawlCompanyWebsite(company, {
+          ...options.crawl,
+          ...(options.onProgress
+            ? {
+                onProgress: async (crawl) =>
+                  options.onProgress?.({
+                    kind: "crawl",
+                    company,
+                    crawl,
+                  }),
+              }
+            : {}),
+        });
       } catch (error) {
         result = emptyResult(
           company,
@@ -118,6 +177,12 @@ export async function enrichCompanies(
           );
         }
       }
+      const decision = await options.onProgress?.({
+        kind: "company_completed",
+        company,
+        result,
+      });
+      if (decision === "stop") stopRequested = true;
       return result;
     },
   );
