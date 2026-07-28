@@ -8,6 +8,7 @@ import { CommunicationTimeline, OutreachPage } from './Outreach';
 import { apiFetch } from './api';
 import { supabase } from './supabase';
 import { projectIdFromSearch, projectSearchUrl } from './projectLinks';
+import { hasCurrentAttioLink, needsProjectClassification } from './projectStatus';
 import { postcodeFromAddress } from '../supabase/functions/_shared/project-enrichment.js';
 
 const ProjectMap = lazy(() => import('./ProjectMap'));
@@ -66,10 +67,11 @@ const matchesCompletionWindow = (dateValue, window) => {
   if(window==='past')return date<today;
   return true;
 };
-const fetchAllRows = async (table, columns, pageSize=1000) => {
+const fetchAllRows = async (table, columns, pageSize=1000, filterQuery=query=>query) => {
   const rows = [];
   for (let from = 0; ; from += pageSize) {
-    const {data,error} = await supabase.from(table).select(columns).range(from,from+pageSize-1);
+    const query=filterQuery(supabase.from(table).select(columns));
+    const {data,error} = await query.range(from,from+pageSize-1);
     if (error) return {data:null,error};
     rows.push(...(data||[]));
     if (!data || data.length < pageSize) return {data:rows,error:null};
@@ -114,9 +116,9 @@ function App({session,cloudEnabled}){
     fetchAllRows('outreach_leads','*'),
     fetchAllRows('outreach_communications','*'),
     fetchAllRows('outreach_suppressions','*'),
-    fetchAllRows('attio_sync_links','project_id,entity_type,attio_record_id,attio_web_url,sync_status,sync_error,synced_at'),
+    fetchAllRows('attio_sync_links','project_id,attio_record_id,attio_web_url,sync_status,sync_error,synced_at',1000,query=>query.eq('entity_type','project')),
     fetchAllRows('ccs_project_enrichment','*')
-  ]).then(([s,n,h,sync,t,taskRows,outreachRows,communicationRows,suppressionRows,attioRows,enrichmentRows])=>{if(s.data)setSaved(new Set(s.data.map(x=>x.project_id)));if(n.data)setNotes(Object.fromEntries(n.data.map(x=>[x.project_id,x.note])));if(h.data)setHistory(Object.fromEntries(h.data.map(x=>[x.project_id,x])));if(sync.data)setSyncStatus(sync.data);if(t.data)setTracking(Object.fromEntries(t.data.map(x=>[x.project_id,x])));if(taskRows.data)setTasks(taskRows.data);if(outreachRows.data)setOutreachLeads(outreachRows.data);if(communicationRows.data)setCommunications(communicationRows.data);if(suppressionRows.data)setSuppressions(suppressionRows.data);if(attioRows.data)setAttioLinks(Object.fromEntries(attioRows.data.filter(x=>x.entity_type==='project'&&x.project_id).map(x=>[x.project_id,x])));if(enrichmentRows.data)setEnrichment(Object.fromEntries(enrichmentRows.data.map(x=>[x.project_id,x])))}) },[cloudEnabled]);
+  ]).then(([s,n,h,sync,t,taskRows,outreachRows,communicationRows,suppressionRows,attioRows,enrichmentRows])=>{if(s.data)setSaved(new Set(s.data.map(x=>x.project_id)));if(n.data)setNotes(Object.fromEntries(n.data.map(x=>[x.project_id,x.note])));if(h.data)setHistory(Object.fromEntries(h.data.map(x=>[x.project_id,x])));if(sync.data)setSyncStatus(sync.data);if(t.data)setTracking(Object.fromEntries(t.data.map(x=>[x.project_id,x])));if(taskRows.data)setTasks(taskRows.data);if(outreachRows.data)setOutreachLeads(outreachRows.data);if(communicationRows.data)setCommunications(communicationRows.data);if(suppressionRows.data)setSuppressions(suppressionRows.data);if(attioRows.data)setAttioLinks(Object.fromEntries(attioRows.data.filter(x=>x.project_id).map(x=>[x.project_id,x])));if(enrichmentRows.data)setEnrichment(Object.fromEntries(enrichmentRows.data.map(x=>[x.project_id,x])))}) },[cloudEnabled]);
   useEffect(()=>setPage(1),[query,filters,activeView]);
 
   const options=useMemo(()=>({locations:unique(projects,'LaId'),contractors:unique(projects,'MainContractor'),clients:unique(projects,'Client')}),[projects]);
@@ -139,8 +141,8 @@ function App({session,cloudEnabled}){
         || (filters.opportunity==='fit-out'&&intelligence.fit_out_state==='yes')
         || (filters.opportunity==='new-build-housing'&&intelligence.new_build_housing_state==='yes')
         || (filters.opportunity==='contact'&&Boolean(meta?.marker_email||meta?.site_manager_phone))
-        || (filters.opportunity==='attio'&&Boolean(attioLinks[p.Id]?.attio_web_url))
-        || (filters.opportunity==='needs-classification'&&!intelligence.sector&&!intelligence.work_type))
+        || (filters.opportunity==='attio'&&hasCurrentAttioLink(attioLinks[p.Id]))
+        || (filters.opportunity==='needs-classification'&&needsProjectClassification(intelligence)))
       && (!filters.liveOnly||p.TypeOfSite==='CCS'||!p.TypeOfSite);
   }),[projects,query,filters,history,enrichment,attioLinks]);
   const visibleProjects=activeView==='saved'?filtered.filter(p=>saved.has(p.Id)):filtered;
@@ -209,7 +211,7 @@ function App({session,cloudEnabled}){
       <SelectFilter label="Location" value={draftFilters.location} onChange={location=>updateDraftFilter('location',location)} options={options.locations} allLabel="All locations"/>
       <SelectFilter label="Lead activity" value={draftFilters.recency} onChange={recency=>updateDraftFilter('recency',recency)} options={['new','updated']} allLabel="All project activity"/>
       <label className="filter"><span>Completion window</span><select value={draftFilters.completionWindow} onChange={e=>updateDraftFilter('completionWindow',e.target.value)}><option value="">Any completion date</option><option value="next-3">Completing in 0–3 months</option><option value="3-9">Decorating window: 3–9 months</option><option value="9-18">Completing in 9–18 months</option><option value="past">Past completion date</option><option value="unknown">Completion date unknown</option></select></label>
-      <label className="filter"><span>Sales opportunity</span><select value={draftFilters.opportunity} onChange={e=>updateDraftFilter('opportunity',e.target.value)}><option value="">All opportunities</option><option value="decorating">Decorating window</option><option value="fit-out">Confirmed fit-out</option><option value="new-build-housing">Confirmed new-build housing</option><option value="contact">Contact available</option><option value="attio">Linked in Attio</option><option value="needs-classification">Needs classification</option></select></label>
+      <label className="filter"><span>Sales opportunity</span><select value={draftFilters.opportunity} onChange={e=>updateDraftFilter('opportunity',e.target.value)}><option value="">All opportunities</option><option value="decorating">Decorating window</option><option value="fit-out">Confirmed fit-out</option><option value="new-build-housing">Confirmed new-build housing</option><option value="contact">Contact available</option><option value="attio">Current Attio link</option><option value="needs-classification">Needs classification</option></select></label>
       <label className="switch-row"><span>Live Sites Only</span><input type="checkbox" checked={draftFilters.liveOnly} onChange={e=>updateDraftFilter('liveOnly',e.target.checked)}/><i/></label>
       <SelectFilter label="Contractor" value={draftFilters.contractor} onChange={contractor=>updateDraftFilter('contractor',contractor)} options={options.contractors} allLabel="All contractors"/>
       <SelectFilter label="Client" value={draftFilters.client} onChange={client=>updateDraftFilter('client',client)} options={options.clients} allLabel="All clients"/>
@@ -250,7 +252,7 @@ function ProjectTable({loading,projects,selected,saved,notes,history,tracking,en
       <td><MapPin size={14}/><span>{postcodeFromAddress(meta.address)||value(p.LaId)}</span></td>
       <td className={`date-cell ${endDate?'':'missing'}`}>{fmtDate(endDate)}<small>{programmeLabel(intelligence.programme_stage)}</small></td>
       <td><button className="contact-summary" onClick={()=>open(p)}><b>{meta.site_manager_name||'Not published'}</b><small>{contactChannels||'Open project details'}</small></button></td>
-      <td>{attioLink?.attio_web_url?<a className="attio-row-link" href={attioLink.attio_web_url} target="_blank" rel="noreferrer">Open <ExternalLink size={13}/></a>:<span className="pending-link">Pending</span>}</td>
+      <td>{attioLink?.attio_web_url?<span className="attio-link-status"><a className="attio-row-link" href={attioLink.attio_web_url} target="_blank" rel="noreferrer">Open <ExternalLink size={13}/></a>{attioLink.sync_status==='error'&&<small className="attio-refresh-error">Refresh failed</small>}</span>:<span className="pending-link">Pending</span>}</td>
       <td><button className={'row-icon '+(saved.has(p.Id)?'saved':'')} onClick={()=>toggleSave(p)} aria-label={`${saved.has(p.Id)?'Remove':'Save'} ${p.Name}`}><Star size={18} fill={saved.has(p.Id)?'currentColor':'none'}/></button></td>
       <td><button className="row-icon" onClick={()=>addNote(p)} aria-label={`Note for ${p.Name}`}><StickyNote size={18}/>{notes[p.Id]&&<em/>}</button></td>
     </tr>
@@ -347,13 +349,14 @@ function ProjectDrawer({className='',selected,detail,close,saved,toggleSave,note
   const address=detail?.Address||meta?.address||selected.LaId;
   const postcode=postcodeFromAddress(address);
   const completeness=projectCompleteness(selected,meta,enrichment);
+  const attioRefreshFailed=attioLink?.sync_status==='error';
   return <div className={`drawer ${className}`} role="dialog" aria-label={`${selected.Name} project details`}>
     <div className="drawer-head"><div><h2>{selected.Name}</h2><p>CCS {selected.Id.replace('site','')}{meta&&` · First seen ${fmtDate(meta.first_seen_at)}`}</p></div><button className="icon" onClick={close} aria-label="Close project details"><X/></button></div>
     <div className="drawer-actions">
       <button onClick={toggleSave}><Star size={16} fill={saved?'currentColor':'none'}/>{saved?'Saved':'Save lead'}</button>
       <button onClick={addNote}><StickyNote size={16}/>{note?'Edit note':'Add note'}</button>
       <button onClick={queueOutreach}><Megaphone size={16}/>{outreachLead?'Open outreach':'Add to outreach'}</button>
-      {attioLink?.attio_web_url&&<a className="attio-action" href={attioLink.attio_web_url} target="_blank" rel="noreferrer"><ExternalLink size={16}/>Open in Attio</a>}
+      {attioLink?.attio_web_url&&<a className={`attio-action${attioRefreshFailed?' refresh-failed':''}`} href={attioLink.attio_web_url} target="_blank" rel="noreferrer"><ExternalLink size={16}/>{attioRefreshFailed?'Open last linked Attio record':'Open in Attio'}</a>}
     </div>
     <section className="lead-workflow"><h3>Lead workflow</h3><label>Stage<select value={tracking.stage||'new'} onChange={e=>updateTracking({stage:e.target.value})}>{STAGES.map(stage=><option key={stage} value={stage}>{stage[0].toUpperCase()+stage.slice(1)}</option>)}</select></label><label>Next action<input key={tracking.next_action||''} defaultValue={tracking.next_action||''} placeholder="e.g. Call the site manager" onBlur={e=>updateTracking({next_action:e.target.value})}/></label><label>Follow-up date<input type="date" value={tracking.next_action_at?.slice(0,10)||''} onChange={e=>updateTracking({next_action_at:e.target.value?new Date(`${e.target.value}T09:00:00`).toISOString():null})}/></label></section>
     <ProjectTaskList tasks={tasks} createTask={createTask} toggleTask={toggleTask} deleteTask={deleteTask}/>
@@ -375,7 +378,7 @@ function ProjectDrawer({className='',selected,detail,close,saved,toggleSave,note
         <dt>Data Coverage</dt><dd>{completeness}%</dd>
       </dl>{enrichment.classification_evidence?.length>0&&<p className="classification-evidence">{enrichment.classification_evidence.join(' · ')}</p>}</section>
       <section className="facts"><h3>Project details</h3><dl><dt>Main Contractor</dt><dd>{value(detail.MainContractor||selected.MainContractor)}</dd><dt>Client</dt><dd>{value(detail.Client||selected.Client)}</dd><dt>Project Period</dt><dd><CalendarDays size={14}/>{fmtDate(detail.SiteStartDate||meta?.site_start_date)} – {fmtDate(detail.SiteEndDate||meta?.site_end_date)}</dd><dt>Address</dt><dd>{value(address)}</dd><dt>Postcode</dt><dd>{postcode||'Not published'}</dd><dt>Local Authority</dt><dd>{value(detail.LocalAuthority||selected.LaId)}</dd><dt>Last CCS Visit</dt><dd>{fmtDate(detail.LastVisitDate||meta?.last_visit_date)}</dd><dt>Last Detail Check</dt><dd>{meta?.detail_last_checked_at?new Date(meta.detail_last_checked_at).toLocaleString('en-GB'):'Not published'}</dd></dl></section>
-      <section className="record-links"><h3>Connected records</h3>{attioLink?.attio_web_url?<><a className="source" href={attioLink.attio_web_url} target="_blank" rel="noreferrer">Open linked Attio Project <ExternalLink size={15}/></a><small>Last linked {attioLink.synced_at?new Date(attioLink.synced_at).toLocaleString('en-GB'):'date not published'}</small></>:<p>Attio project link pending.</p>}{mapUrl&&<a className="source" href={mapUrl} target="_blank" rel="noreferrer">Open project map <MapPin size={15}/></a>}<a className="source" href={detail.SourceUrl} target="_blank" rel="noreferrer">Open verified CCS source record <ExternalLink size={15}/></a></section>
+      <section className="record-links"><h3>Connected records</h3>{attioLink?.attio_web_url?<><a className="source" href={attioLink.attio_web_url} target="_blank" rel="noreferrer">Open linked Attio Project <ExternalLink size={15}/></a>{attioRefreshFailed&&<small className="attio-refresh-error">Latest refresh failed. This opens the last successfully linked record.</small>}<small>Last successfully linked {attioLink.synced_at?new Date(attioLink.synced_at).toLocaleString('en-GB'):'date not published'}</small></>:<p>Attio project link pending.</p>}{mapUrl&&<a className="source" href={mapUrl} target="_blank" rel="noreferrer">Open project map <MapPin size={15}/></a>}<a className="source" href={detail.SourceUrl} target="_blank" rel="noreferrer">Open verified CCS source record <ExternalLink size={15}/></a></section>
     </>}
   </div>
 }
