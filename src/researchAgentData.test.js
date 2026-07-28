@@ -69,24 +69,39 @@ test('returns null when no saved run exists', () => {
   assert.equal(buildResearchRun({run: null}), null);
 });
 
-test('uses governed RPCs for runner controls and candidate decisions', async () => {
+test('uses authenticated server routes for runner controls and candidate decisions', async () => {
   const calls = [];
-  const client = {
-    rpc: async (name, input) => {
-      calls.push({name, input});
-      return {error: null};
-    },
+  const request = async (path, options) => {
+    calls.push({
+      path,
+      method: options.method,
+      body: JSON.parse(options.body),
+    });
+    return new Response(JSON.stringify({accepted: true}), {status: 200});
   };
-  await updateResearchRunStatus(client, 'run-1', 'paused');
-  await updateResearchCandidateReview(client, 'candidate-1', 'approved');
+  await updateResearchRunStatus(request, 'run-1', 'paused');
+  await updateResearchCandidateReview(request, 'candidate-1', 'approved');
   assert.deepEqual(calls, [
     {
-      name: 'request_research_run_control',
-      input: {p_run_id: 'run-1', p_status: 'paused'},
+      path: '/api/research/runs/run-1/control',
+      method: 'POST',
+      body: {status: 'paused'},
     },
     {
-      name: 'review_research_candidate',
-      input: {p_candidate_id: 'candidate-1', p_decision: 'approved'},
+      path: '/api/research/candidates/candidate-1/review',
+      method: 'POST',
+      body: {decision: 'approved'},
     },
   ]);
+});
+
+test('surfaces a safe server action error', async () => {
+  const request = async () => new Response(
+    JSON.stringify({error: 'Research run is not controllable'}),
+    {status: 409},
+  );
+  await assert.rejects(
+    updateResearchRunStatus(request, 'run-1', 'paused'),
+    /Research run is not controllable/u,
+  );
 });

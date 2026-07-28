@@ -33,6 +33,7 @@ import {
   updateResearchRunStatus,
 } from './researchAgentData';
 import {supabase} from './supabase';
+import {apiFetch} from './api';
 import './research-agent.css';
 
 const taskStatus = {
@@ -274,7 +275,7 @@ export function ResearchAgentPage({cloudEnabled = false, session = null}) {
     if (!session?.user?.id || !supabase) return;
     setWorking(true);
     try {
-      await updateResearchRunStatus(supabase, run.id, status);
+      await updateResearchRunStatus(apiFetch, run.id, status);
       setRun(current => ({...current, status}));
       setDataError('');
     } catch (error) {
@@ -311,7 +312,7 @@ export function ResearchAgentPage({cloudEnabled = false, session = null}) {
     if (!session?.user?.id || !supabase) return;
     setWorking(true);
     try {
-      await updateResearchCandidateReview(supabase, candidate.id, decision);
+      await updateResearchCandidateReview(apiFetch, candidate.id, decision);
       setRun(current => reviewCandidate(current, candidate.id, decision));
       setDataError('');
     } catch (error) {

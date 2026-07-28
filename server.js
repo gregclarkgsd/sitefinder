@@ -9,6 +9,13 @@ import {
   applyResearchIngestMessage,
   parseResearchRunId,
 } from './research-agent-ingest.js';
+import {
+  applyResearchCandidateReview,
+  applyResearchRunControl,
+  parseResearchControlRequest,
+  parseResearchReviewRequest,
+  ResearchActionError,
+} from './research-agent-actions.js';
 
 const app = express();
 const PORT = process.env.PORT || 8787;
@@ -274,6 +281,64 @@ app.get('/api/research/runs/:runId/control', requireResearchIngestAuth, async (r
     return res.json({status: data.status});
   } catch {
     return res.status(503).json({error: 'Research control state is unavailable'});
+  }
+});
+
+function researchActionError(res, error, fallback) {
+  if (error?.name === 'ZodError') {
+    return res.status(400).json({error: 'Invalid Research Agent action'});
+  }
+  if (error instanceof ResearchActionError) {
+    return res.status(error.statusCode).json({error: error.message});
+  }
+  return res.status(503).json({error: fallback});
+}
+
+app.post('/api/research/runs/:runId/control', requireSiteFinderAuth, async (req, res) => {
+  if (!researchAdminClient) {
+    return res.status(503).json({error: 'Research controls are not configured'});
+  }
+  if (!req.siteFinderAuth?.userId) {
+    return res.status(403).json({error: 'A signed-in GSD user is required'});
+  }
+  try {
+    const input = parseResearchControlRequest(req.params.runId, req.body);
+    const result = await applyResearchRunControl(
+      researchAdminClient,
+      input,
+      req.siteFinderAuth.userId,
+    );
+    return res.json(result);
+  } catch (error) {
+    return researchActionError(
+      res,
+      error,
+      'Research control state could not be updated',
+    );
+  }
+});
+
+app.post('/api/research/candidates/:candidateId/review', requireSiteFinderAuth, async (req, res) => {
+  if (!researchAdminClient) {
+    return res.status(503).json({error: 'Research reviews are not configured'});
+  }
+  if (!req.siteFinderAuth?.userId) {
+    return res.status(403).json({error: 'A signed-in GSD user is required'});
+  }
+  try {
+    const input = parseResearchReviewRequest(req.params.candidateId, req.body);
+    const result = await applyResearchCandidateReview(
+      researchAdminClient,
+      input,
+      req.siteFinderAuth.userId,
+    );
+    return res.json(result);
+  } catch (error) {
+    return researchActionError(
+      res,
+      error,
+      'Research candidate decision could not be saved',
+    );
   }
 });
 

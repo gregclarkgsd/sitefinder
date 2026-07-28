@@ -87,20 +87,31 @@ export async function loadLatestResearchRun(client) {
   });
 }
 
-export async function updateResearchRunStatus(client, runId, status) {
-  const {error} = await client.rpc('request_research_run_control', {
-    p_run_id: runId,
-    p_status: status,
+async function sendResearchAction(request, path, body) {
+  const response = await request(path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
   });
-  if (error) throw error;
+  if (response.ok) return response.json();
+  const payload = await response.json().catch(() => ({}));
+  throw new Error(payload.error || `Research Agent action failed with HTTP ${response.status}`);
 }
 
-export async function updateResearchCandidateReview(client, candidateId, decision) {
-  const {error} = await client.rpc('review_research_candidate', {
-    p_candidate_id: candidateId,
-    p_decision: decision,
-  });
-  if (error) throw error;
+export function updateResearchRunStatus(request, runId, status) {
+  return sendResearchAction(
+    request,
+    `/api/research/runs/${encodeURIComponent(runId)}/control`,
+    {status},
+  );
+}
+
+export function updateResearchCandidateReview(request, candidateId, decision) {
+  return sendResearchAction(
+    request,
+    `/api/research/candidates/${encodeURIComponent(candidateId)}/review`,
+    {decision},
+  );
 }
 
 export function subscribeToResearchRun(client, runId, onChange) {

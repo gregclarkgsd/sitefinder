@@ -144,6 +144,10 @@ authorised changes through Supabase Realtime. When a saved run exists, the
 control room loads it automatically; otherwise it remains visibly in preview
 mode.
 
+Pause, Resume, Stop and candidate-review decisions go through authenticated
+SiteFinder server routes. The browser has read-only table grants and cannot
+call a privileged database function or update a research record directly.
+
 The server-only `POST /api/research/ingest` endpoint accepts the narrow,
 validated progress contract used by the enrichment worker. It requires all
 three server-only settings below and fails closed when any is absent:
