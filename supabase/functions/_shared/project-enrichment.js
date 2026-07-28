@@ -55,7 +55,7 @@ const WORK_TYPE_RULES = [
   },
   {
     label: "Extension",
-    pattern: /\b(extension|extended|expansion)\b/i,
+    pattern: /\bextensions?\b/i,
   },
   {
     label: "New Build",

@@ -57,7 +57,7 @@ test('keeps unsupported classifications honestly unknown', () => {
   });
 
   assert.equal(result.sector, null);
-  assert.equal(result.work_type, 'Extension');
+  assert.equal(result.work_type, null);
   assert.equal(result.fit_out_state, 'unknown');
   assert.equal(result.new_build_housing_state, 'unknown');
 });
