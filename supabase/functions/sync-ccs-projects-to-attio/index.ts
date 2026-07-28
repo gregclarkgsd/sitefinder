@@ -39,6 +39,24 @@ type Enrichment = {
   classification_sources?: unknown;
   classification_method?: string | null;
   researched_at?: string | null;
+  livesites_site_id?: string | null;
+  livesites_url?: string | null;
+  livesites_live_status?: string | null;
+  contract_value_gbp?: number | null;
+  project_type?: string | null;
+  livesites_project_description?: string | null;
+  unit_count?: number | null;
+  unit_type?: string | null;
+  trades_required?: string[] | null;
+  painting_and_decorating_required?: boolean | null;
+  livesites_image_url?: string | null;
+  livesites_contact_name?: string | null;
+  livesites_contact_job_title?: string | null;
+  livesites_contact_phone?: string | null;
+  livesites_contact_email?: string | null;
+  livesites_contact_email_verified?: boolean | null;
+  livesites_verified_at?: string | null;
+  source_conflicts?: string[] | null;
 };
 
 type ProjectRow = {
@@ -106,6 +124,136 @@ const PROJECT_ATTRIBUTES: AttributeDefinition[] = [
     type: 'text',
     description: 'Opens the published CCS coordinates in Google Maps.',
     aliases: ['google maps', 'map link'],
+  },
+  {
+    title: 'Postcode',
+    api_slug: 'postcode',
+    type: 'text',
+    description: 'Project postcode extracted from the verified source address.',
+  },
+  {
+    title: 'LiveSites Project ID',
+    api_slug: 'livesites_site_id',
+    type: 'text',
+    description: 'Stable project identifier from the licensed LiveSites source.',
+  },
+  {
+    title: 'Open in LiveSites',
+    api_slug: 'livesites_url',
+    type: 'text',
+    description: 'Opens the exact project in LiveSites.',
+    aliases: ['livesites link', 'livesites project'],
+  },
+  {
+    title: 'Contract Value',
+    api_slug: 'contract_value_gbp',
+    type: 'currency',
+    description: 'Published LiveSites contract value in GBP.',
+    config: {
+      currency: {
+        default_currency_code: 'GBP',
+        display_type: 'symbol',
+      },
+    },
+    aliases: ['contract value gbp', 'contract_value'],
+  },
+  {
+    title: 'Project Type',
+    api_slug: 'project_type',
+    type: 'text',
+    description: 'LiveSites project type or size label, such as Office Refurbishment or 16 Flats.',
+  },
+  {
+    title: 'LiveSites Description',
+    api_slug: 'livesites_project_description',
+    type: 'text',
+    description: 'Project description published by the licensed LiveSites source.',
+  },
+  {
+    title: 'Units',
+    api_slug: 'unit_count',
+    type: 'number',
+    description: 'Published number of homes, flats, rooms or other project units.',
+    aliases: ['unit count'],
+  },
+  {
+    title: 'Unit Type',
+    api_slug: 'unit_type',
+    type: 'text',
+    description: 'Published unit description, such as Flats, Homes or Care Apartments.',
+  },
+  {
+    title: 'Trades Required',
+    api_slug: 'trades_required',
+    type: 'text',
+    description: 'Complete licensed-source trade list for the project.',
+  },
+  {
+    title: 'Painting & Decorating Required',
+    api_slug: 'painting_and_decorating_required',
+    type: 'checkbox',
+    description: 'Whether LiveSites explicitly lists Painting & Decorating as a required trade.',
+    aliases: ['painting required', 'decorating required'],
+  },
+  {
+    title: 'LiveSites Status',
+    api_slug: 'livesites_live_status',
+    type: 'text',
+    description: 'The project status published by LiveSites.',
+  },
+  {
+    title: 'LiveSites Image',
+    api_slug: 'livesites_image_url',
+    type: 'text',
+    description: 'Published LiveSites project image.',
+  },
+  {
+    title: 'LiveSites Contact',
+    api_slug: 'livesites_contact_name',
+    type: 'text',
+    description: 'Best available LiveSites project contact name.',
+  },
+  {
+    title: 'LiveSites Contact Role',
+    api_slug: 'livesites_contact_job_title',
+    type: 'text',
+    description: 'Published job title for the LiveSites project contact.',
+  },
+  {
+    title: 'LiveSites Contact Email',
+    api_slug: 'livesites_contact_email',
+    type: 'text',
+    description: 'Published contact email from LiveSites.',
+  },
+  {
+    title: 'LiveSites Contact Phone',
+    api_slug: 'livesites_contact_phone',
+    type: 'text',
+    description: 'Published contact telephone number from LiveSites.',
+  },
+  {
+    title: 'LiveSites Email Verified',
+    api_slug: 'livesites_contact_email_verified',
+    type: 'checkbox',
+    description: 'Whether LiveSites marks the project contact email as verified.',
+  },
+  {
+    title: 'Last LiveSites Verified',
+    api_slug: 'livesites_verified_at',
+    type: 'timestamp',
+    description: 'When the licensed LiveSites source was last verified or exported.',
+  },
+  {
+    title: 'Source Conflicts',
+    api_slug: 'source_conflicts',
+    type: 'text',
+    description: 'Fields where CCS and LiveSites disagree and require human review.',
+  },
+  {
+    title: 'Data Sources',
+    api_slug: 'data_sources',
+    type: 'text',
+    description: 'Authoritative sources currently connected to this project.',
   },
   {
     title: 'GSD Timing',
@@ -297,6 +445,13 @@ function safeNumber(value: unknown) {
   return Number.isFinite(number) ? number : null;
 }
 
+function postcodeFromAddress(value: string | null | undefined) {
+  return String(value || '').toUpperCase()
+    .match(/\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/)?.[1]
+    ?.replace(/\s+/g, '')
+    ?.replace(/(.+)(.{3})$/, '$1 $2') || null;
+}
+
 function deriveEnrichment(project: ProjectRow): Enrichment {
   const existing = firstRelation(project.ccs_project_enrichment) || {};
   const start = project.site_start_date ? new Date(`${project.site_start_date}T00:00:00Z`) : null;
@@ -442,7 +597,7 @@ function put(
   const attribute = findAttribute(attributes, aliases);
   if (!attribute?.is_writable) return;
 
-  if (attribute.type === 'number') {
+  if (attribute.type === 'number' || attribute.type === 'currency') {
     const number = safeNumber(value);
     if (number !== null) values[attribute.api_slug] = number;
     return;
@@ -461,6 +616,21 @@ function put(
   }
   if (attribute.type === 'text' || attribute.type === 'status' || attribute.type === 'select') {
     values[attribute.api_slug] = String(value);
+  }
+}
+
+function putOrClear(
+  values: Record<string, unknown>,
+  attributes: AttioAttribute[],
+  aliases: string[],
+  value: unknown,
+) {
+  const attribute = findAttribute(attributes, aliases);
+  if (!attribute?.is_writable) return;
+  const hadValue = attribute.api_slug in values;
+  put(values, attributes, aliases, value);
+  if (!hadValue && !(attribute.api_slug in values)) {
+    values[attribute.api_slug] = [];
   }
 }
 
@@ -659,6 +829,7 @@ async function upsertProjectRecord(
   put(values, attributes, ['start_date', 'site_start_date'], project.site_start_date);
   put(values, attributes, ['end_date', 'site_end_date'], project.site_end_date);
   put(values, attributes, ['address', 'project_address'], project.address);
+  put(values, attributes, ['postcode'], postcodeFromAddress(project.address));
   put(values, attributes, ['local_authority'], project.local_authority);
   put(values, attributes, ['site_closed'], project.site_closed);
   put(values, attributes, ['first_seen'], project.first_seen_at);
@@ -668,7 +839,12 @@ async function upsertProjectRecord(
   put(values, attributes, ['sitefinder_url', 'sitefinder link'], sitefinderProjectUrl(project.project_id));
   put(values, attributes, ['map_url', 'map link', 'google maps'], enrichment.map_url);
   put(values, attributes, ['ccs_source_url', 'sitefinder_source_url'], ccsSourceUrl(project.project_id));
-  put(values, attributes, ['project_summary', 'summary'], project.summary);
+  put(
+    values,
+    attributes,
+    ['project_summary', 'summary'],
+    project.summary,
+  );
   put(values, attributes, ['site_manager_job_title'], project.site_manager_job_title);
   put(values, attributes, ['site_contact_email'], project.marker_email);
   put(values, attributes, ['site_contact_phone'], project.site_manager_phone);
@@ -688,6 +864,65 @@ async function upsertProjectRecord(
     attributes,
     ['classification_evidence'],
     (enrichment.classification_evidence || []).join(' · '),
+  );
+  putOrClear(values, attributes, ['livesites_site_id'], enrichment.livesites_site_id);
+  putOrClear(values, attributes, ['livesites_url', 'livesites link'], enrichment.livesites_url);
+  putOrClear(
+    values,
+    attributes,
+    ['contract_value_gbp', 'contract value', 'contract_value'],
+    enrichment.contract_value_gbp,
+  );
+  putOrClear(values, attributes, ['project_type'], enrichment.project_type);
+  putOrClear(
+    values,
+    attributes,
+    ['livesites_project_description'],
+    enrichment.livesites_project_description,
+  );
+  putOrClear(values, attributes, ['unit_count', 'unit count'], enrichment.unit_count);
+  putOrClear(values, attributes, ['unit_type'], enrichment.unit_type);
+  putOrClear(
+    values,
+    attributes,
+    ['trades_required'],
+    (enrichment.trades_required || []).join(' · '),
+  );
+  putOrClear(
+    values,
+    attributes,
+    ['painting_and_decorating_required', 'painting required', 'decorating required'],
+    enrichment.painting_and_decorating_required,
+  );
+  putOrClear(values, attributes, ['livesites_live_status'], enrichment.livesites_live_status);
+  putOrClear(values, attributes, ['livesites_image_url'], enrichment.livesites_image_url);
+  putOrClear(values, attributes, ['livesites_contact_name'], enrichment.livesites_contact_name);
+  putOrClear(
+    values,
+    attributes,
+    ['livesites_contact_job_title'],
+    enrichment.livesites_contact_job_title,
+  );
+  putOrClear(values, attributes, ['livesites_contact_email'], enrichment.livesites_contact_email);
+  putOrClear(values, attributes, ['livesites_contact_phone'], enrichment.livesites_contact_phone);
+  putOrClear(
+    values,
+    attributes,
+    ['livesites_contact_email_verified'],
+    enrichment.livesites_contact_email_verified,
+  );
+  putOrClear(values, attributes, ['livesites_verified_at'], enrichment.livesites_verified_at);
+  putOrClear(
+    values,
+    attributes,
+    ['source_conflicts'],
+    (enrichment.source_conflicts || []).join(' · '),
+  );
+  put(
+    values,
+    attributes,
+    ['data_sources'],
+    enrichment.livesites_site_id ? 'CCS · SiteFinder · LiveSites' : 'CCS · SiteFinder',
   );
 
   putReference(
@@ -722,7 +957,7 @@ async function upsertProjectRecord(
 
   try {
     return existing
-      ? await attio.updateRecord(object, existing.id.record_id, optionalValues(values))
+      ? await attio.replaceRecordValues(object, existing.id.record_id, values)
       : await attio.createRecord(object, optionalValues(values));
   } catch (error) {
     const stageAttribute = findAttribute(attributes, ['stage']);
@@ -732,7 +967,7 @@ async function upsertProjectRecord(
     const withoutStage = { ...values };
     delete withoutStage[stageAttribute.api_slug];
     return existing
-      ? await attio.updateRecord(object, existing.id.record_id, optionalValues(withoutStage))
+      ? await attio.replaceRecordValues(object, existing.id.record_id, withoutStage)
       : await attio.createRecord(object, optionalValues(withoutStage));
   }
 }
