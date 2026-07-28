@@ -104,12 +104,14 @@ test('requires the deterministic task identifier used by the worker', () => {
 
 test('records machine progress without impersonating a human actor', async () => {
   let savedRow;
+  let upsertOptions;
   const client = {
     from(table) {
       assert.equal(table, 'research_runs');
       return {
-        upsert(row) {
+        upsert(row, options) {
           savedRow = row;
+          upsertOptions = options;
           return Promise.resolve({error: null});
         },
       };
@@ -129,17 +131,23 @@ test('records machine progress without impersonating a human actor', async () =>
   });
 
   assert.equal(savedRow.mode, 'read_only');
-  assert.equal(savedRow.created_by, undefined);
-  assert.equal(savedRow.updated_by, undefined);
+  assert.equal(savedRow.created_by, null);
+  assert.equal(savedRow.updated_by, null);
+  assert.deepEqual(upsertOptions, {
+    onConflict: 'id',
+    ignoreDuplicates: true,
+  });
 });
 
 test('worker heartbeats cannot undo a human pause or stop request', async () => {
   let allowedStatuses;
+  let updateRow;
   const client = {
     from(table) {
       assert.equal(table, 'research_runs');
       return {
-        update() {
+        update(row) {
+          updateRow = row;
           return {
             eq() {
               return {
@@ -170,4 +178,5 @@ test('worker heartbeats cannot undo a human pause or stop request', async () => 
   assert.deepEqual(allowedStatuses, ['queued', 'running']);
   assert.equal(allowedStatuses.includes('paused'), false);
   assert.equal(allowedStatuses.includes('stopping'), false);
+  assert.equal(updateRow.updated_by, null);
 });

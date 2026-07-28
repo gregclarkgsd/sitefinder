@@ -171,8 +171,10 @@ export async function applyResearchIngestMessage(client, rawMessage) {
       people_found: run.peopleFound,
       configuration: run.configuration,
       started_at: run.startedAt,
+      created_by: null,
+      updated_by: null,
       updated_at: now,
-    }, {onConflict: 'id'});
+    }, {onConflict: 'id', ignoreDuplicates: true});
   }
 
   if (message.type === 'task.upsert') {
@@ -195,6 +197,8 @@ export async function applyResearchIngestMessage(client, rawMessage) {
         started_at: task.startedAt,
         completed_at: task.completedAt,
       }),
+      created_by: null,
+      updated_by: null,
       updated_at: now,
     }, {onConflict: 'id'});
   }
@@ -208,6 +212,7 @@ export async function applyResearchIngestMessage(client, rawMessage) {
       event_type: event.eventType,
       message: event.message,
       ...optionalFields({source_url: event.sourceUrl}),
+      created_by: null,
       created_at: event.createdAt || now,
     }, {onConflict: 'run_id,sequence', ignoreDuplicates: true});
   }
@@ -229,6 +234,8 @@ export async function applyResearchIngestMessage(client, rawMessage) {
       crm_comparison: candidate.crmComparison,
       email_status: candidate.emailStatus,
       confidence: candidate.confidence,
+      created_by: null,
+      updated_by: null,
       updated_at: now,
     }, {onConflict: 'run_id,external_candidate_id'});
   }
@@ -242,6 +249,7 @@ export async function applyResearchIngestMessage(client, rawMessage) {
       people_found: run.peopleFound,
       failure_message: run.failureMessage || null,
       completed_at: run.completedAt || null,
+      updated_by: null,
       updated_at: now,
     })
       .eq('id', run.id)
