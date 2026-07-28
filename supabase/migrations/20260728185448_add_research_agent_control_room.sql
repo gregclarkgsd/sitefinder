@@ -28,8 +28,8 @@ create table public.research_runs (
   failure_message text,
   started_at timestamptz,
   completed_at timestamptz,
-  created_by uuid not null references auth.users(id),
-  updated_by uuid not null references auth.users(id),
+  created_by uuid references auth.users(id),
+  updated_by uuid references auth.users(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -65,8 +65,8 @@ create table public.research_tasks (
   last_error text,
   started_at timestamptz,
   completed_at timestamptz,
-  created_by uuid not null references auth.users(id),
-  updated_by uuid not null references auth.users(id),
+  created_by uuid references auth.users(id),
+  updated_by uuid references auth.users(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (run_id, company_id)
@@ -94,7 +94,7 @@ create table public.research_events (
     source_url is null
     or source_url ~ '^https://'
   ),
-  created_by uuid not null references auth.users(id),
+  created_by uuid references auth.users(id),
   created_at timestamptz not null default now(),
   unique (run_id, sequence)
 );
@@ -118,8 +118,8 @@ create table public.research_candidates (
     check (review_status in ('pending', 'approved', 'rejected', 'investigate')),
   reviewed_by uuid references auth.users(id),
   reviewed_at timestamptz,
-  created_by uuid not null references auth.users(id),
-  updated_by uuid not null references auth.users(id),
+  created_by uuid references auth.users(id),
+  updated_by uuid references auth.users(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (run_id, external_candidate_id),

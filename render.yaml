@@ -19,7 +19,5 @@ services:
         sync: false
       - key: RESEARCH_AGENT_INGEST_TOKEN
         sync: false
-      - key: RESEARCH_AGENT_ACTOR_ID
-        sync: false
       - key: SITEFINDER_URL
         value: https://gsd-sitefinder.onrender.com

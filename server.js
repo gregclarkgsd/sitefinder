@@ -31,7 +31,6 @@ const supabaseUrl = process.env.VITE_SUPABASE_URL;
 const supabaseKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
 const researchIngestToken = process.env.RESEARCH_AGENT_INGEST_TOKEN;
-const researchActorId = process.env.RESEARCH_AGENT_ACTOR_ID;
 const siteFinderOrigin = String(process.env.SITEFINDER_URL || 'https://gsd-sitefinder.onrender.com').replace(/\/+$/, '');
 const oauthIssuer = supabaseUrl ? `${supabaseUrl.replace(/\/+$/, '')}/auth/v1` : null;
 const authClient = supabaseUrl && supabaseKey
@@ -64,7 +63,7 @@ function secretsMatch(left, right) {
 }
 
 function requireResearchIngestAuth(req, res, next) {
-  if (!researchAdminClient || !researchIngestToken || !researchActorId) {
+  if (!researchAdminClient || !researchIngestToken) {
     return res.status(503).json({ error: 'Research ingestion is not configured' });
   }
   if (!secretsMatch(bearerToken(req), researchIngestToken)) {
@@ -246,11 +245,7 @@ app.get('/api/projects/:id', requireSiteFinderAuth, async (req, res) => {
 
 app.post('/api/research/ingest', requireResearchIngestAuth, async (req, res) => {
   try {
-    const result = await applyResearchIngestMessage(
-      researchAdminClient,
-      req.body,
-      researchActorId,
-    );
+    const result = await applyResearchIngestMessage(researchAdminClient, req.body);
     res.status(202).json(result);
   } catch (error) {
     const validationFailure = error?.name === 'ZodError';

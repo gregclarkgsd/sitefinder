@@ -113,7 +113,7 @@ function optionalFields(values) {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined));
 }
 
-export async function applyResearchIngestMessage(client, rawMessage, actorId) {
+export async function applyResearchIngestMessage(client, rawMessage) {
   const message = parseResearchIngestMessage(rawMessage);
   const now = new Date().toISOString();
   let operation;
@@ -132,8 +132,6 @@ export async function applyResearchIngestMessage(client, rawMessage, actorId) {
       people_found: run.peopleFound,
       configuration: run.configuration,
       started_at: run.startedAt,
-      created_by: actorId,
-      updated_by: actorId,
       updated_at: now,
     }, {onConflict: 'id'});
   }
@@ -158,8 +156,6 @@ export async function applyResearchIngestMessage(client, rawMessage, actorId) {
         started_at: task.startedAt,
         completed_at: task.completedAt,
       }),
-      created_by: actorId,
-      updated_by: actorId,
       updated_at: now,
     }, {onConflict: 'id'});
   }
@@ -173,7 +169,6 @@ export async function applyResearchIngestMessage(client, rawMessage, actorId) {
       event_type: event.eventType,
       message: event.message,
       ...optionalFields({source_url: event.sourceUrl}),
-      created_by: actorId,
       created_at: event.createdAt || now,
     }, {onConflict: 'run_id,sequence', ignoreDuplicates: true});
   }
@@ -195,8 +190,6 @@ export async function applyResearchIngestMessage(client, rawMessage, actorId) {
       crm_comparison: candidate.crmComparison,
       email_status: candidate.emailStatus,
       confidence: candidate.confidence,
-      created_by: actorId,
-      updated_by: actorId,
       updated_at: now,
     }, {onConflict: 'run_id,external_candidate_id'});
   }
@@ -210,7 +203,6 @@ export async function applyResearchIngestMessage(client, rawMessage, actorId) {
       people_found: run.peopleFound,
       failure_message: run.failureMessage || null,
       completed_at: run.completedAt || null,
-      updated_by: actorId,
       updated_at: now,
     }).eq('id', run.id);
   }

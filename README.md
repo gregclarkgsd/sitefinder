@@ -149,18 +149,21 @@ SiteFinder server routes. The browser has read-only table grants and cannot
 call a privileged database function or update a research record directly.
 
 The server-only `POST /api/research/ingest` endpoint accepts the narrow,
-validated progress contract used by the enrichment worker. It requires all
-three server-only settings below and fails closed when any is absent:
+validated progress contract used by the enrichment worker. It requires both
+server-only settings below and fails closed when either is absent:
 
 ```text
 SUPABASE_SECRET_KEY
 RESEARCH_AGENT_INGEST_TOKEN
-RESEARCH_AGENT_ACTOR_ID
 ```
 
 The ingestion route accepts only bounded run/task progress, HTTPS source
 events and candidate evidence. Unknown fields are rejected. These settings
 must never be added to frontend variables or browser code.
+
+Machine-generated progress rows deliberately have no human creator. Signed-in
+Pause, Resume, Stop and candidate-review actions record the GSD user who made
+the decision.
 
 ## Project intelligence and Attio links
 

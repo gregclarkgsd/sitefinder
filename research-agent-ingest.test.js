@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  applyResearchIngestMessage,
   parseResearchIngestMessage,
   parseResearchRunId,
 } from './research-agent-ingest.js';
@@ -70,4 +71,35 @@ test('rejects unknown event fields and oversized runs', () => {
 test('accepts only a valid UUID for research control lookups', () => {
   assert.equal(parseResearchRunId(runId), runId);
   assert.throws(() => parseResearchRunId('../research_runs'));
+});
+
+test('records machine progress without impersonating a human actor', async () => {
+  let savedRow;
+  const client = {
+    from(table) {
+      assert.equal(table, 'research_runs');
+      return {
+        upsert(row) {
+          savedRow = row;
+          return Promise.resolve({error: null});
+        },
+      };
+    },
+  };
+
+  await applyResearchIngestMessage(client, {
+    type: 'run.upsert',
+    run: {
+      id: runId,
+      name: 'Five company live pilot',
+      source: 'file',
+      status: 'running',
+      companyLimit: 5,
+      startedAt: '2026-07-28T09:00:00.000Z',
+    },
+  });
+
+  assert.equal(savedRow.mode, 'read_only');
+  assert.equal(savedRow.created_by, undefined);
+  assert.equal(savedRow.updated_by, undefined);
 });
