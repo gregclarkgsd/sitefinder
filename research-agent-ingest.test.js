@@ -180,3 +180,70 @@ test('worker heartbeats cannot undo a human pause or stop request', async () => 
   assert.equal(allowedStatuses.includes('stopping'), false);
   assert.equal(updateRow.updated_by, null);
 });
+
+test('all machine-authored detail rows have null human attribution', async () => {
+  const companyId = 'company-1';
+  const deterministicTaskId = stableResearchTaskId(runId, companyId);
+  const capture = async (expectedTable, message) => {
+    let savedRow;
+    const client = {
+      from(table) {
+        assert.equal(table, expectedTable);
+        return {
+          upsert(row) {
+            savedRow = row;
+            return Promise.resolve({error: null});
+          },
+        };
+      },
+    };
+    await applyResearchIngestMessage(client, message);
+    return savedRow;
+  };
+
+  const task = await capture('research_tasks', {
+    type: 'task.upsert',
+    task: {
+      id: deterministicTaskId,
+      runId,
+      companyId,
+      companyName: 'Example Construction',
+      domain: 'example.com',
+      status: 'waiting',
+    },
+  });
+  assert.equal(task.created_by, null);
+  assert.equal(task.updated_by, null);
+
+  const event = await capture('research_events', {
+    type: 'event.append',
+    event: {
+      runId,
+      taskId: deterministicTaskId,
+      sequence: 1,
+      eventType: 'page',
+      message: 'Opened an official company page.',
+      sourceUrl: 'https://example.com/team',
+    },
+  });
+  assert.equal(event.created_by, null);
+
+  const candidate = await capture('research_candidates', {
+    type: 'candidate.upsert',
+    candidate: {
+      id: '33333333-3333-4333-8333-333333333333',
+      runId,
+      taskId: deterministicTaskId,
+      externalCandidateId: 'candidate-1',
+      companyId,
+      name: 'Example Person',
+      jobTitle: 'Commercial Manager',
+      roleCategory: 'commercial',
+      sourceKind: 'company_website',
+      sourceUrl: 'https://example.com/team',
+      confidence: 0.9,
+    },
+  });
+  assert.equal(candidate.created_by, null);
+  assert.equal(candidate.updated_by, null);
+});
