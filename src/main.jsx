@@ -111,7 +111,7 @@ function App({session,cloudEnabled}){
   const [attioLinks,setAttioLinks]=useState({}), [enrichment,setEnrichment]=useState({});
   const [tasks,setTasks]=useState([]);
   const [outreachLeads,setOutreachLeads]=useState(()=>cloudEnabled?[]:demoOutreachLeads), [communications,setCommunications]=useState([]), [suppressions,setSuppressions]=useState([]);
-  const [mailboxes,setMailboxes]=useState(()=>cloudEnabled?[]:[{mailbox_email:'sales@gsdecorating.com',display_name:'GSD Sales',is_active:true}]), [mailboxesLoading,setMailboxesLoading]=useState(cloudEnabled);
+  const [mailboxes,setMailboxes]=useState([]), [mailboxesLoading,setMailboxesLoading]=useState(cloudEnabled);
   const [draftFilters,setDraftFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true}), [filters,setFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true});
   const draftFiltersRef=useRef(draftFilters);
 
@@ -141,6 +141,7 @@ function App({session,cloudEnabled}){
   },[cloudEnabled]);
   useEffect(()=>{if(activeView==='outreach')loadMailboxes()},[activeView,loadMailboxes]);
   const connectMailbox=async()=>{
+    if(!cloudEnabled){window.location.assign('https://gsd-sitefinder.onrender.com/?view=outreach');return}
     const {data,error:mailboxError}=await supabase.functions.invoke('gmail-mailboxes',{body:{action:'begin'}});
     if(mailboxError||data?.error||!data?.auth_url){setError(`Could not start Gmail connection: ${data?.error||mailboxError?.message||'No connection URL returned'}`);return}
     window.location.assign(data.auth_url);
