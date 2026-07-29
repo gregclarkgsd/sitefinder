@@ -80,6 +80,12 @@ export default function AuthGate({ children }) {
       });
       setBusy(false);
       if (error) return setMessage(error.message);
+      if (!data.user?.identities?.length) {
+        setMode('login');
+        setPassword('');
+        setConfirmPassword('');
+        return setMessage('An account already exists for this email. Log in, or use “Forgotten your password?” to create a password.');
+      }
       return setMessage(data.session
         ? 'Account created. You are now signed in.'
         : 'Account created. Check your work email to confirm it, then sign in.');
