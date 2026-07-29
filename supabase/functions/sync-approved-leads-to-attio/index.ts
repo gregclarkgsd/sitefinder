@@ -1,8 +1,14 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
-import { createClient } from 'npm:@supabase/supabase-js@2';
+import { createClient } from 'npm:@supabase/supabase-js@2.110.7';
+import { canonicalCcsSiteId } from '../_shared/sync-safety.js';
 
 const ATTIO_API = 'https://api.attio.com/v2';
 const SITEFINDER_URL = 'https://gsd-sitefinder.onrender.com';
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
 const GENERIC_EMAIL_DOMAINS = new Set([
   'gmail.com', 'googlemail.com', 'hotmail.com', 'outlook.com', 'live.com',
   'icloud.com', 'me.com', 'yahoo.com', 'aol.com', 'proton.me', 'protonmail.com',
@@ -11,7 +17,7 @@ const GENERIC_EMAIL_DOMAINS = new Set([
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
 }
 
@@ -42,6 +48,7 @@ async function attioFetch(token: string, path: string, init: RequestInit = {}) {
       'Content-Type': 'application/json',
       ...(init.headers || {}),
     },
+    signal: init.signal || AbortSignal.timeout(25_000),
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -163,6 +170,7 @@ function relationshipSlug(
 }
 
 Deno.serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -237,7 +245,7 @@ Deno.serve(async (req: Request) => {
       Deno.env.get('ATTIO_PROJECT_PEOPLE_ATTRIBUTE'),
     );
 
-    const ccsNumber = String(lead.project_id).replace(/^site/, '');
+    const ccsNumber = canonicalCcsSiteId(lead.project_id);
     const sourceUrl = `https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails/${ccsNumber}/null`;
     const summary = project?.summary
       || `${lead.project_name} is a CCS-registered construction project in ${project?.local_authority || 'the GSD target area'}.`;
@@ -247,7 +255,7 @@ Deno.serve(async (req: Request) => {
         referenced_actor_type: 'workspace-member',
         referenced_actor_id: ownerId,
       }],
-      ccs_site_id: lead.project_id,
+      ccs_site_id: ccsNumber,
       sitefinder_source_url: sourceUrl,
       local_authority: project?.local_authority,
       main_contractor: project?.main_contractor || lead.company_name,
@@ -279,15 +287,27 @@ Deno.serve(async (req: Request) => {
       { method: 'PUT', body: JSON.stringify({ data: { values } }) },
     );
     const projectRecordId = recordId(attioBody?.data);
+    if (!projectRecordId) throw new Error('Attio returned no Project record identifier');
+    const projectWebUrl = String(attioBody?.data?.web_url || '').trim() || null;
     const syncedAt = new Date().toISOString();
-    await db.from('outreach_leads').update({
+    const { data: persistedLead, error: persistenceError } = await db.from('outreach_leads').update({
       attio_record_id: projectRecordId,
+      attio_project_record_id: projectRecordId,
+      attio_web_url: projectWebUrl,
+      attio_project_url: projectWebUrl,
       attio_company_record_id: companyId || null,
       attio_person_record_id: personId || null,
       attio_synced_at: syncedAt,
       attio_sync_error: null,
       updated_at: syncedAt,
-    }).eq('id', lead.id);
+    }).eq('id', lead.id).select('id').maybeSingle();
+    if (persistenceError || !persistedLead) {
+      throw new Error(
+        `Attio Project ${projectRecordId} was written, but SiteFinder could not persist the link: ${
+          persistenceError?.message || 'lead row was not updated'
+        }`,
+      );
+    }
 
     return json({
       ok: true,
@@ -300,15 +320,20 @@ Deno.serve(async (req: Request) => {
       company_matched_by: companyResult.matched_by,
       person_matched_by: personResult.matched_by,
       attio_synced_at: syncedAt,
-      web_url: attioBody?.data?.web_url || null,
+      web_url: projectWebUrl,
       source: SITEFINDER_URL,
     });
   } catch (error) {
     const message = String(error instanceof Error ? error.message : error).slice(0, 1000);
-    await db.from('outreach_leads').update({
+    const { error: errorPersistenceError } = await db.from('outreach_leads').update({
       attio_sync_error: message,
       updated_at: new Date().toISOString(),
     }).eq('id', lead.id);
-    return json({ error: message }, 502);
+    return json({
+      error: message,
+      ...(errorPersistenceError
+        ? { persistence_error: `Attio error state could not be saved: ${errorPersistenceError.message}` }
+        : {}),
+    }, 502);
   }
 });

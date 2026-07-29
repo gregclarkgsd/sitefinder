@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "kind": "sitefinder_crm_identity_resolutions",
+  "status": "approved",
+  "reviewedBy": "crm-reviewer@example.invalid",
+  "reviewedAt": "2026-07-29T10:00:00.000Z",
+  "reason": "Reviewed SiteFinder company identities against the cleaned CRM snapshots.",
+  "resolutions": [
+    {
+      "resolutionKey": "sf-contractor-101-to-attio-example",
+      "sitefinder": {
+        "source": "sitefinder_contractor",
+        "sourceId": "101"
+      },
+      "crm": {
+        "source": "attio",
+        "sourceId": "example-attio-company-record"
+      },
+      "reason": "The legal name, registered number and official website were checked by the reviewer."
+    }
+  ]
+}

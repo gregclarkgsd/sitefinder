@@ -1,5 +1,9 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'npm:@supabase/supabase-js@2.110.7';
+import {
+  assertSafeCcsFeedSnapshot,
+  isExplicitlyEnabled,
+} from '../_shared/sync-safety.js';
 
 const MARKERS = 'https://ccsfilestore.blob.core.windows.net/constructionmap/live/json/sitemarkers.json';
 const DETAILS = 'https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails';
@@ -71,7 +75,7 @@ async function fetchExistingProjects(db: any) {
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await db
       .from('ccs_projects')
-      .select('project_id,payload_hash,detail_hash,first_seen_at,discovered_after_baseline,last_changed_at,detail_last_checked_at,detail_data')
+      .select('project_id,payload_hash,detail_hash,first_seen_at,discovered_after_baseline,last_changed_at,detail_last_checked_at,detail_data,is_active')
       .range(from, from + pageSize - 1);
     if (error) throw error;
     rows.push(...(data || []));
@@ -101,9 +105,12 @@ Deno.serve(async request => {
     const markerResponse = await fetch(MARKERS, { signal: AbortSignal.timeout(20_000) });
     if (!markerResponse.ok) throw new Error(`CCS marker feed returned ${markerResponse.status}`);
     const allMarkers = await markerResponse.json() as JsonRecord[];
+    if (!Array.isArray(allMarkers)) throw new Error('CCS marker feed did not return an array');
     const projects = allMarkers.filter(project => TARGET_AUTHORITY.test(String(project.LaId || '')));
 
     const existing = await fetchExistingProjects(db);
+    const activeProjectCount = existing.filter(project => project.is_active).length;
+    assertSafeCcsFeedSnapshot(allMarkers, projects.length, activeProjectCount);
 
     const baseline = existing.length === 0;
     const previous = new Map(existing.map(row => [row.project_id, row]));
@@ -129,7 +136,7 @@ Deno.serve(async request => {
 
     let newProjects = 0;
     let changedProjects = 0;
-    const projectsForAttio: string[] = [];
+    const projectsEligibleForAttio: string[] = [];
     const rows = [];
 
     for (const { project, detail, detailError } of enriched) {
@@ -143,7 +150,7 @@ Deno.serve(async request => {
       const changed = markerChanged || detailChanged;
       if (isNew && !baseline) newProjects++;
       if (changed) changedProjects++;
-      if (!baseline && (isNew || changed)) projectsForAttio.push(projectId);
+      if (!baseline && (isNew || changed)) projectsEligibleForAttio.push(projectId);
 
       const managerName = detail
         ? [detail.SiteManagerFirstName, detail.SiteManagerLastName].filter(Boolean).join(' ') || null
@@ -180,12 +187,6 @@ Deno.serve(async request => {
       });
     }
 
-    const { error: inactiveError } = await db
-      .from('ccs_projects')
-      .update({ is_active: false })
-      .eq('is_active', true);
-    if (inactiveError) throw inactiveError;
-
     for (let index = 0; index < rows.length; index += 100) {
       const { error: upsertError } = await db
         .from('ccs_projects')
@@ -193,11 +194,15 @@ Deno.serve(async request => {
       if (upsertError) throw upsertError;
     }
 
-    const { error: inactiveScheduleError } = await db
-      .from('ccs_project_schedule')
-      .update({ is_active: false, updated_at: observedAt })
-      .eq('is_active', true);
-    if (inactiveScheduleError) throw inactiveScheduleError;
+    // Retire unseen rows only after every fresh row is durable. A failed batch
+    // therefore leaves conservative false positives instead of deactivating
+    // the live catalogue before replacement data is safely stored.
+    const { error: inactiveError } = await db
+      .from('ccs_projects')
+      .update({ is_active: false })
+      .eq('is_active', true)
+      .lt('last_seen_at', observedAt);
+    if (inactiveError) throw inactiveError;
 
     const scheduleRows = rows.map(row => ({
       project_id: row.project_id,
@@ -214,8 +219,15 @@ Deno.serve(async request => {
       if (scheduleError) throw scheduleError;
     }
 
+    const { error: inactiveScheduleError } = await db
+      .from('ccs_project_schedule')
+      .update({ is_active: false, updated_at: observedAt })
+      .eq('is_active', true)
+      .lt('updated_at', observedAt);
+    if (inactiveScheduleError) throw inactiveScheduleError;
+
     const completedAt = new Date().toISOString();
-    await db.from('ccs_sync_runs').update({
+    const { error: completionError } = await db.from('ccs_sync_runs').update({
       completed_at: completedAt,
       status: 'completed',
       total_projects: projects.length,
@@ -224,9 +236,14 @@ Deno.serve(async request => {
       detail_projects: detailProjects,
       detail_errors: detailErrors,
     }).eq('id', run.id);
+    if (completionError) throw completionError;
 
     let attioSyncedProjects = 0;
     const attioSyncErrors: string[] = [];
+    const attioAutoSyncEnabled = isExplicitlyEnabled(
+      Deno.env.get('CCS_ATTIO_AUTO_SYNC_ENABLED'),
+    );
+    const projectsForAttio = attioAutoSyncEnabled ? projectsEligibleForAttio : [];
     for (let index = 0; index < projectsForAttio.length; index += 10) {
       try {
         const response = await fetch(
@@ -264,17 +281,27 @@ Deno.serve(async request => {
       changedProjects,
       detailProjects,
       detailErrors,
+      attioAutoSyncEnabled,
+      attioEligibleProjects: projectsEligibleForAttio.length,
       attioRequestedProjects: projectsForAttio.length,
       attioSyncedProjects,
       attioSyncErrors,
+      attioSyncSkippedReason: !attioAutoSyncEnabled && projectsEligibleForAttio.length
+        ? 'automatic Attio sync is disabled; approved-lead handoff remains available'
+        : null,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await db.from('ccs_sync_runs').update({
+    const { error: failurePersistenceError } = await db.from('ccs_sync_runs').update({
       completed_at: new Date().toISOString(),
       status: 'failed',
       error_message: message,
     }).eq('id', run.id);
-    return Response.json({ error: message }, { status: 500 });
+    return Response.json({
+      error: message,
+      ...(failurePersistenceError
+        ? { run_persistence_error: failurePersistenceError.message }
+        : {}),
+    }, { status: 500 });
   }
 });

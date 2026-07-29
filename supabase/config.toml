@@ -1,0 +1,39 @@
+# Reproducible local/deployment settings for the SiteFinder Supabase project.
+project_id = "sitefinder"
+
+[db]
+major_version = 17
+
+[db.migrations]
+enabled = true
+
+[db.seed]
+enabled = false
+
+# Scheduled and webhook functions authenticate inside the function with a
+# dedicated secret or provider signature, so the gateway JWT check is disabled.
+[functions.sync-ccs-projects]
+verify_jwt = false
+
+[functions.sync-ccs-projects-to-attio]
+verify_jwt = false
+
+[functions.gmail-mailboxes]
+verify_jwt = false
+
+[functions.gmail-outreach-webhook]
+verify_jwt = false
+
+[functions.process-outreach-followups]
+verify_jwt = false
+
+# User-triggered functions keep the gateway JWT check and also validate the GSD
+# email domain inside the function.
+[functions.sync-approved-leads-to-attio]
+verify_jwt = true
+
+[functions.send-approved-outreach]
+verify_jwt = true
+
+[functions.connect-gmail-watch]
+verify_jwt = true

@@ -6,6 +6,7 @@ import './mobile.css';
 import AuthGate from './AuthGate';
 import { CommunicationTimeline, OutreachPage } from './Outreach';
 import { ResearchAgentPage } from './ResearchAgent';
+import { canSendInitial } from './outreachState';
 import { apiFetch } from './api';
 import { supabase } from './supabase';
 import { projectIdFromSearch, projectSearchUrl } from './projectLinks';
@@ -90,11 +91,11 @@ const navItems = [
 ];
 
 const demoOutreachLeads = [
-  {id:'demo-bowmer',project_id:'site520001',project_name:'Office & warehouse, Birmingham',recipient_email:'procurement@bandk.co.uk',recipient_name:'Jemima Rowe',company_name:'Bowmer + Kirkland',status:'queued',email_subject:'Painting and spray support for your Birmingham project',email_body:'Hi Jemima,\\n\\nI came across Bowmer + Kirkland’s new office and warehouse project in Birmingham and wanted to introduce GSD Decorating.\\n\\nWe support main contractors with high-quality painting, decorating and specialist spray finishes. We would welcome the opportunity to price the relevant packages for this project.\\n\\nWould it be useful if I sent over a short capability summary and examples of similar work?\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',attio_record_id:'demo-attio-1',attio_synced_at:'2026-07-29T10:28:00Z',created_at:'2026-07-29T09:14:00Z',updated_at:'2026-07-29T10:29:00Z'},
-  {id:'demo-overbury',project_id:'site517241',project_name:'HQ fit-out, London',recipient_email:'david.walsh@overbury.com',recipient_name:'David Walsh',company_name:'Overbury plc',status:'queued',email_subject:'Decorating support for your London fit-out',email_body:'Hi David,\\n\\nI noticed the new London fit-out and wanted to introduce GSD Decorating.\\n\\nWe support fit-out contractors with commercial decorating and spray finishes across London and the South East.\\n\\nWould you be the right person to speak with about the package?\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',created_at:'2026-07-29T08:41:00Z',updated_at:'2026-07-29T09:41:00Z'},
-  {id:'demo-parkeray',project_id:'site520220',project_name:'Retail scheme, Barking',recipient_email:'ian.ambrose@parkeray.co.uk',recipient_name:'Ian Ambrose',company_name:'Parkeray Ltd',status:'approved',email_subject:'Painting support for your Barking retail scheme',email_body:'Hi Ian,\\n\\nI came across the Barking retail scheme and wanted to introduce GSD Decorating.\\n\\nWe would welcome the opportunity to price the painting and decorating packages.\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',created_at:'2026-07-28T14:18:00Z',updated_at:'2026-07-29T09:18:00Z'},
-  {id:'demo-mackley',project_id:'site520831',project_name:'Industrial extension, Leicester',recipient_email:'glen.oaten@mackley.co.uk',recipient_name:'Glen Oaten',company_name:'J T Mackley & Co Ltd',status:'sent',email_subject:'Decorating support for your Leicester project',email_body:'Hi Glen,\\n\\nI wanted to introduce GSD Decorating in relation to your Leicester industrial extension.\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',created_at:'2026-07-27T08:32:00Z',updated_at:'2026-07-29T08:32:00Z'},
-  {id:'demo-bam',project_id:'site520900',project_name:'Education project, Kent',recipient_email:'commercial@bam.com',recipient_name:'Commercial Team',company_name:'BAM Construction',status:'followup_due',email_subject:'Follow-up: Kent education project',email_body:'Hi,\\n\\nI wanted to follow up on my note about the Kent education project.\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',created_at:'2026-07-20T08:32:00Z',updated_at:'2026-07-24T08:32:00Z'},
+  {id:'demo-bowmer',project_id:'site520001',project_name:'Office & warehouse, Birmingham',recipient_email:'alex.morgan@example.invalid',recipient_name:'Alex Morgan',company_name:'Bowmer + Kirkland',status:'queued',email_subject:'Painting and spray support for your Birmingham project',email_body:'Hi Alex,\\n\\nI came across Bowmer + Kirkland’s new office and warehouse project in Birmingham and wanted to introduce GSD Decorating.\\n\\nWe support main contractors with high-quality painting, decorating and specialist spray finishes. We would welcome the opportunity to price the relevant packages for this project.\\n\\nWould it be useful if I sent over a short capability summary and examples of similar work?\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',attio_record_id:'demo-attio-1',attio_synced_at:'2026-07-29T10:28:00Z',created_at:'2026-07-29T09:14:00Z',updated_at:'2026-07-29T10:29:00Z'},
+  {id:'demo-overbury',project_id:'site517241',project_name:'HQ fit-out, London',recipient_email:'taylor.lee@example.invalid',recipient_name:'Taylor Lee',company_name:'Overbury plc',status:'queued',email_subject:'Decorating support for your London fit-out',email_body:'Hi Taylor,\\n\\nI noticed the new London fit-out and wanted to introduce GSD Decorating.\\n\\nWe support fit-out contractors with commercial decorating and spray finishes across London and the South East.\\n\\nWould you be the right person to speak with about the package?\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',created_at:'2026-07-29T08:41:00Z',updated_at:'2026-07-29T09:41:00Z'},
+  {id:'demo-parkeray',project_id:'site520220',project_name:'Retail scheme, Barking',recipient_email:'jordan.patel@example.invalid',recipient_name:'Jordan Patel',company_name:'Parkeray Ltd',status:'approved',email_subject:'Painting support for your Barking retail scheme',email_body:'Hi Jordan,\\n\\nI came across the Barking retail scheme and wanted to introduce GSD Decorating.\\n\\nWe would welcome the opportunity to price the painting and decorating packages.\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',created_at:'2026-07-28T14:18:00Z',updated_at:'2026-07-29T09:18:00Z'},
+  {id:'demo-mackley',project_id:'site520831',project_name:'Industrial extension, Leicester',recipient_email:'casey.green@example.invalid',recipient_name:'Casey Green',company_name:'J T Mackley & Co Ltd',status:'sent',email_subject:'Decorating support for your Leicester project',email_body:'Hi Casey,\\n\\nI wanted to introduce GSD Decorating in relation to your Leicester industrial extension.\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',created_at:'2026-07-27T08:32:00Z',updated_at:'2026-07-29T08:32:00Z'},
+  {id:'demo-bam',project_id:'site520900',project_name:'Education project, Kent',recipient_email:'commercial@example.invalid',recipient_name:'Commercial Team',company_name:'BAM Construction',status:'followup_due',email_subject:'Follow-up: Kent education project',email_body:'Hi,\\n\\nI wanted to follow up on my note about the Kent education project.\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',created_at:'2026-07-20T08:32:00Z',updated_at:'2026-07-24T08:32:00Z'},
 ];
 
 function SelectFilter({label,value,onChange,options,allLabel}) {
@@ -111,6 +112,7 @@ function App({session,cloudEnabled}){
   const [attioLinks,setAttioLinks]=useState({}), [enrichment,setEnrichment]=useState({});
   const [tasks,setTasks]=useState([]);
   const [outreachLeads,setOutreachLeads]=useState(()=>cloudEnabled?[]:demoOutreachLeads), [communications,setCommunications]=useState([]), [suppressions,setSuppressions]=useState([]);
+  const [outreachFocusProjectId,setOutreachFocusProjectId]=useState('');
   const [mailboxes,setMailboxes]=useState([]), [mailboxesLoading,setMailboxesLoading]=useState(cloudEnabled), [mailboxError,setMailboxError]=useState('');
   const [draftFilters,setDraftFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true}), [filters,setFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true});
   const draftFiltersRef=useRef(draftFilters);
@@ -185,6 +187,18 @@ function App({session,cloudEnabled}){
 
   const open=useCallback(async (p,{updateUrl=true}={})=>{setSelected(p);setDetail(null);if(updateUrl)window.history.replaceState({},'',projectSearchUrl(window.location,p.Id));try{const r=await apiFetch(`${API}/projects/${p.Id}`);if(!r.ok)throw new Error('Detail unavailable');setDetail(await r.json())}catch{setDetail({...p,Address:p.LaId,SourceUrl:`https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails/${p.Id.replace('site','')}/null`})}},[]);
   const closeProject=useCallback(()=>{setSelected(null);setDetail(null);window.history.replaceState({},'',projectSearchUrl(window.location,null))},[]);
+  const goToView=id=>{
+    setActiveView(id);
+    if(id!=='outreach')setOutreachFocusProjectId('');
+    setSelected(null);
+    setDetail(null);
+    setMobileMoreOpen(false);
+    const url=new URL(window.location.href);
+    url.searchParams.delete('project');
+    if(id==='projects')url.searchParams.delete('view');
+    else url.searchParams.set('view',id);
+    window.history.replaceState({},'',`${url.pathname}${url.search}${url.hash}`);
+  };
   useEffect(()=>{
     const linkedId=projectIdFromSearch(window.location.search);
     if(!linkedId||!projects.length||selected?.Id===linkedId)return;
@@ -200,44 +214,62 @@ function App({session,cloudEnabled}){
   const deleteTask=async task=>{setTasks(current=>current.filter(item=>item.id!==task.id));if(cloudEnabled){const {error:taskError}=await supabase.from('project_tasks').delete().eq('id',task.id);if(taskError){setTasks(current=>[task,...current]);setError(`Could not delete task: ${taskError.message}`)}}};
   const queueOutreach=async(p,record={})=>{
     const existing=outreachLeads.find(lead=>lead.project_id===p.Id);
-    if(existing){setActiveView('outreach');setSelected(null);return true}
+    setOutreachFocusProjectId(p.Id);
+    if(existing){goToView('outreach');return true}
     const contactName=[record.SiteManagerFirstName,record.SiteManagerLastName].filter(Boolean).join(' ')||null;
     const company=value(record.MainContractor||p.MainContractor,'your team');
     const row={id:crypto.randomUUID(),project_id:p.Id,project_name:p.Name,recipient_email:record.MarkerEmail||null,recipient_name:contactName,company_name:company,status:'queued',email_subject:`Painting and decorating support for ${p.Name}`,email_body:`Hi${contactName?` ${contactName.split(' ')[0]}`:''},\n\nI’m getting in touch from GSD Painting & Decorating regarding ${p.Name}.\n\nWe support main contractors with commercial painting and decorating packages across London and the Home Counties. If this package is still available, we would welcome the opportunity to introduce GSD and understand your requirements.\n\nWould you be the right person to speak with?\n\nKind regards,\nSam\nGSD Painting & Decorating`,created_at:new Date().toISOString(),updated_at:new Date().toISOString()};
     setOutreachLeads(current=>[row,...current]);
     if(cloudEnabled){const {data,error:outreachError}=await supabase.from('outreach_leads').insert({...row,created_by:session.user.id,updated_by:session.user.id}).select().single();if(outreachError){setOutreachLeads(current=>current.filter(lead=>lead.id!==row.id));setError(`Could not add outreach lead: ${outreachError.message}`);return false}setOutreachLeads(current=>current.map(lead=>lead.id===row.id?data:lead))}
-    setActiveView('outreach');setSelected(null);return true
+    goToView('outreach');return true
   };
   const updateOutreach=async(lead,changes)=>{
     const now=new Date().toISOString(), updates={...changes,updated_at:now};
     if(changes.status==='approved'&&cloudEnabled)updates.approved_by=session.user.id;
     const previous=lead;
     setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,...updates}:item));
-    if(cloudEnabled){const {data,error:outreachError}=await supabase.from('outreach_leads').update({...updates,updated_by:session.user.id}).eq('id',lead.id).select().single();if(outreachError){setOutreachLeads(current=>current.map(item=>item.id===lead.id?previous:item));setError(`Could not update outreach: ${outreachError.message}`);return false}setOutreachLeads(current=>current.map(item=>item.id===lead.id?data:item));if(changes.status==='approved')await syncOutreachToAttio(data)}
+    if(cloudEnabled){const {data,error:outreachError}=await supabase.from('outreach_leads').update({...updates,updated_by:session.user.id}).eq('id',lead.id).select().single();if(outreachError){setOutreachLeads(current=>current.map(item=>item.id===lead.id?previous:item));setError(`Could not update outreach: ${outreachError.message}`);return false}setOutreachLeads(current=>current.map(item=>item.id===lead.id?data:item))}
     return true
   };
   const approveAndSendOutreach=async(lead,changes)=>{
+    if(!canSendInitial(lead))return {ok:false,sent:false,approved:false,error:'This outreach status is not eligible for an initial email.'};
     const approved=await updateOutreach(lead,changes);
-    if(!approved)return {ok:false,sent:false,error:'The draft could not be approved.'};
-    if(!cloudEnabled)return {ok:true,sent:false};
+    if(!approved)return {ok:false,sent:false,approved:false,error:'The draft could not be approved.'};
+    if(!cloudEnabled)return {ok:true,sent:false,approved:true};
+    const attioResult=await syncOutreachToAttio(lead);
+    if(!attioResult.ok)return {ok:false,sent:false,approved:true,error:`Draft approved, but Attio could not be updated: ${attioResult.error}. No email was sent.`};
     const {data,error:sendError}=await supabase.functions.invoke('send-approved-outreach',{body:{lead_id:lead.id,mode:'initial'}});
     if(sendError||data?.error){
-      const message=data?.error||sendError?.message||'GSD mailbox connection is not ready';
-      setError(`Draft approved, but no email was sent: ${message}`);
-      return {ok:false,sent:false,error:`Draft approved, but no email was sent: ${message}`};
+      let responseData=data;
+      if(sendError?.context){const responseBody=await sendError.context.clone().json().catch(()=>null);responseData=responseBody||responseData}
+      const message=responseData?.error||sendError?.message||'GSD mailbox connection is not ready';
+      const reconciliationRequired=responseData?.reconciliation_required===true;
+      const emailSent=responseData?.email_sent===true||Boolean(responseData?.gmail_message_id);
+      if(reconciliationRequired){
+        const updatedAt=new Date().toISOString();
+        setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,status:'reconciliation_required',...(emailSent?{sent_at:item.sent_at||updatedAt}:{}),gmail_message_id:responseData?.gmail_message_id||item.gmail_message_id,gmail_thread_id:responseData?.gmail_thread_id||item.gmail_thread_id,updated_at:updatedAt}:item));
+        const outcome=emailSent?'Gmail reports that the email was sent':'SiteFinder could not confirm whether Gmail sent the email';
+        return {ok:false,sent:emailSent,emailSent:responseData?.email_sent,approved:true,reconciliationRequired:true,error:`${outcome}, and the record needs reconciliation: ${message}. Do not retry; check Gmail and reconcile the record first.`};
+      }
+      if(emailSent){
+        const sentAt=new Date().toISOString();
+        setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,status:'reconciliation_required',sent_at:item.sent_at||sentAt,gmail_message_id:responseData?.gmail_message_id||item.gmail_message_id,gmail_thread_id:responseData?.gmail_thread_id||item.gmail_thread_id,updated_at:sentAt}:item));
+        return {ok:false,sent:true,emailSent:true,approved:true,reconciliationRequired:true,error:`The email may have been sent, but SiteFinder could not finish saving its status: ${message}. Do not retry this email; check Gmail and reconcile the record first.`};
+      }
+      return {ok:false,sent:false,approved:true,error:`Draft approved, but no email was sent: ${message}`};
     }
     const sentAt=new Date().toISOString();
     setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,status:'sent',sent_at:sentAt,gmail_message_id:data.gmail_message_id,gmail_thread_id:data.gmail_thread_id,next_follow_up_at:data.next_follow_up_at,follow_up_step:data.follow_up_step,updated_at:sentAt}:item));
     const {data:historyRows}=await supabase.from('outreach_communications').select('*').eq('project_id',lead.project_id).order('occurred_at',{ascending:false});
     if(historyRows)setCommunications(current=>[...current.filter(item=>item.project_id!==lead.project_id),...historyRows]);
-    return {ok:true,sent:true};
+    return {ok:true,sent:true,approved:true};
   };
   const syncOutreachToAttio=async lead=>{
-    if(!cloudEnabled)return false;
+    if(!cloudEnabled)return {ok:true};
     const {data,error:syncError}=await supabase.functions.invoke('sync-approved-leads-to-attio',{body:{lead_id:lead.id}});
-    if(syncError||data?.error){const message=data?.error||syncError?.message||'Attio sync failed';setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,attio_sync_error:message}:item));setError(`Lead approved, but Attio could not be updated: ${message}`);return false}
+    if(syncError||data?.error){const message=data?.error||syncError?.message||'Attio sync failed';setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,attio_sync_error:message}:item));return {ok:false,error:message}}
     setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,attio_record_id:data.attio_record_id,attio_company_record_id:data.attio_company_record_id||null,attio_person_record_id:data.attio_person_record_id||null,attio_synced_at:data.attio_synced_at,attio_sync_error:null}:item));
-    return true
+    return {ok:true}
   };
   const logCommunication=async(p,channel)=>{
     const label=channel==='phone'?'Call notes':'Communication note', body=window.prompt(label,'');
@@ -251,10 +283,8 @@ function App({session,cloudEnabled}){
   const updateDraftFilter=(key,nextValue)=>setDraftFilters(current=>{const next={...current,[key]:nextValue};draftFiltersRef.current=next;return next});
   const applyFilters=()=>setFilters({...draftFiltersRef.current});
   const clearFilters=()=>{const empty={location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true};draftFiltersRef.current=empty;setDraftFilters(empty);setFilters(empty);setQuery('')};
-  const goToView=id=>{setActiveView(id);closeProject();setMobileMoreOpen(false)};
-
   return <div className="app">
-    <header><div className="brand"><Building2/><b>GSD</b> SiteFinder</div><nav aria-label="Primary navigation">{navItems.map(({id,label,icon:Icon})=><button key={id} className={`${activeView===id?'active':''} ${['outreach','insights','contractors'].includes(id)?'secondary-nav':''}`} onClick={()=>goToView(id)}><Icon size={16}/>{label}{id==='saved'&&saved.size>0&&<span>{saved.size}</span>}</button>)}<button className={`more-nav ${mobileMoreOpen?'active':''}`} onClick={()=>setMobileMoreOpen(value=>!value)}><MoreHorizontal size={18}/>More</button></nav><button className="user" onClick={()=>cloudEnabled&&supabase.auth.signOut()} title={cloudEnabled?'Sign out':'Local preview'}>{session?.user?.email?.slice(0,2).toUpperCase()||'GC'}</button>{mobileMoreOpen&&<div className="mobile-more-menu">{navItems.filter(item=>['outreach','insights','contractors'].includes(item.id)).map(({id,label,icon:Icon})=><button key={id} onClick={()=>goToView(id)}><Icon size={17}/>{label}</button>)}</div>}</header>
+    <header><div className="brand"><Building2/><b>GSD</b> SiteFinder</div><nav aria-label="Primary navigation">{navItems.map(({id,label,icon:Icon})=><button key={id} aria-current={activeView===id?'page':undefined} className={`${activeView===id?'active':''} ${['outreach','insights','contractors'].includes(id)?'secondary-nav':''}`} onClick={()=>goToView(id)}><Icon size={16}/>{label}{id==='saved'&&saved.size>0&&<span>{saved.size}</span>}</button>)}<button className={`more-nav ${mobileMoreOpen||['outreach','insights','contractors'].includes(activeView)?'active':''}`} aria-expanded={mobileMoreOpen} aria-controls="mobile-more-menu" aria-current={['outreach','insights','contractors'].includes(activeView)?'page':undefined} onClick={()=>setMobileMoreOpen(value=>!value)}><MoreHorizontal size={18}/>More</button></nav><button className="user" onClick={()=>cloudEnabled&&supabase.auth.signOut()} title={cloudEnabled?'Sign out':'Local preview'}>{session?.user?.email?.slice(0,2).toUpperCase()||'GC'}</button>{mobileMoreOpen&&<div className="mobile-more-menu" id="mobile-more-menu">{navItems.filter(item=>['outreach','insights','contractors'].includes(item.id)).map(({id,label,icon:Icon})=><button key={id} aria-current={activeView===id?'page':undefined} onClick={()=>goToView(id)}><Icon size={17}/>{label}</button>)}</div>}</header>
     {(activeView==='projects'||activeView==='saved'||activeView==='map')&&<aside><div className="aside-title"><b>Filters</b><button onClick={clearFilters}>Clear all</button></div>
       <SelectFilter label="Location" value={draftFilters.location} onChange={location=>updateDraftFilter('location',location)} options={options.locations} allLabel="All locations"/>
       <SelectFilter label="Lead activity" value={draftFilters.recency} onChange={recency=>updateDraftFilter('recency',recency)} options={['new','updated']} allLabel="All project activity"/>
@@ -278,7 +308,7 @@ function App({session,cloudEnabled}){
       </>}
       {activeView==='insights'&&<Insights projects={projects} saved={saved} contractorStats={contractorStats}/>}
       {activeView==='tasks'&&<TaskDashboard tasks={tasks} projects={projects} openProject={open} toggleTask={toggleTask} deleteTask={deleteTask}/>}
-      {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} mailboxes={mailboxes} mailboxesLoading={mailboxesLoading} mailboxError={mailboxError} connectMailbox={connectMailbox} updateLead={updateOutreach} approveAndSend={approveAndSendOutreach}/>}
+      {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} mailboxes={mailboxes} mailboxesLoading={mailboxesLoading} mailboxError={mailboxError} connectMailbox={connectMailbox} updateLead={updateOutreach} approveAndSend={approveAndSendOutreach} focusProjectId={outreachFocusProjectId}/>}
       {activeView==='research'&&<ResearchAgentPage cloudEnabled={cloudEnabled} session={session}/>}
       {activeView==='contractors'&&<Contractors stats={contractorStats} onSelect={name=>{updateDraftFilter('contractor',name);setFilters(x=>({...x,contractor:name}));goToView('projects')}}/>}
     </main>

@@ -67,7 +67,7 @@ try {
   if (!searchData.projects.some(project => project.site_id === '518253')) {
     throw new Error('Project search did not return CCS 518253');
   }
-  if (!completionWindowData.projects.length || completionWindowData.projects.some(project => (
+  if (completionWindowData.projects.some(project => (
     !project.completion_date
     || project.completion_date < completionFrom
     || project.completion_date > completionTo

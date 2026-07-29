@@ -1,5 +1,6 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
-import { createClient } from 'npm:@supabase/supabase-js@2';
+import { createClient } from 'npm:@supabase/supabase-js@2.110.7';
+import { initialWatchState } from '../_shared/gmail-reliability.js';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -77,14 +78,17 @@ Deno.serve(async req => {
       return new Response('Invalid Gmail OAuth callback', { status: 400 });
     }
     const stateHash = await digest(state);
-    const { data: oauthState } = await db
+    const { data: oauthState, error: stateError } = await db
       .from('outreach_oauth_states')
-      .select('*')
+      .delete()
       .eq('state_hash', stateHash)
       .gt('expires_at', new Date().toISOString())
+      .select('*')
       .maybeSingle();
+    if (stateError) {
+      return new Response('The Gmail connection state could not be verified.', { status: 502 });
+    }
     if (!oauthState) return new Response('This Gmail connection link has expired or was already used.', { status: 400 });
-    await db.from('outreach_oauth_states').delete().eq('state_hash', stateHash);
 
     try {
       const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
@@ -97,6 +101,7 @@ Deno.serve(async req => {
           redirect_uri: redirectUri,
           grant_type: 'authorization_code',
         }),
+        signal: AbortSignal.timeout(20_000),
       });
       const tokens = await tokenResponse.json().catch(() => ({}));
       if (!tokenResponse.ok || !tokens.access_token || !tokens.refresh_token) {
@@ -104,6 +109,7 @@ Deno.serve(async req => {
       }
       const profileResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
         headers: { Authorization: `Bearer ${tokens.access_token}` },
+        signal: AbortSignal.timeout(20_000),
       });
       const profile = await profileResponse.json().catch(() => ({}));
       const mailboxEmail = String(profile.email || '').trim().toLowerCase();
@@ -115,21 +121,21 @@ Deno.serve(async req => {
         method: 'POST',
         headers: { Authorization: `Bearer ${tokens.access_token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ topicName, labelIds: ['INBOX'], labelFilterBehavior: 'include' }),
+        signal: AbortSignal.timeout(25_000),
       });
       const watch = await watchResponse.json().catch(() => ({}));
       if (!watchResponse.ok) throw new Error(String(watch?.error?.message || 'Could not start Gmail reply tracking'));
 
+      const connectedAt = new Date().toISOString();
+      const watchState = initialWatchState(watch, connectedAt);
       const { error: saveError } = await db.from('outreach_mailbox_state').upsert({
         mailbox_email: mailboxEmail,
         connected_by: oauthState.requested_by,
         display_name: String(profile.name || mailboxEmail),
         ...encrypted,
         is_active: true,
-        connected_at: new Date().toISOString(),
-        gmail_history_id: String(watch.historyId || ''),
-        watch_expiration: watch.expiration ? new Date(Number(watch.expiration)).toISOString() : null,
-        last_error: null,
-        updated_at: new Date().toISOString(),
+        connected_at: connectedAt,
+        ...watchState,
       });
       if (saveError) throw saveError;
       return Response.redirect(`${oauthState.return_to}?gmail=connected&mailbox=${encodeURIComponent(mailboxEmail)}`, 302);
@@ -160,7 +166,11 @@ Deno.serve(async req => {
     await encryptionKey();
     const state = bytesToBase64(crypto.getRandomValues(new Uint8Array(32)))
       .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-    await db.from('outreach_oauth_states').delete().lt('expires_at', new Date().toISOString());
+    const { error: cleanupError } = await db
+      .from('outreach_oauth_states')
+      .delete()
+      .lt('expires_at', new Date().toISOString());
+    if (cleanupError) return json({ error: `Could not clean up expired OAuth states: ${cleanupError.message}` }, 502);
     const { error } = await db.from('outreach_oauth_states').insert({
       state_hash: await digest(state),
       requested_by: user.id,
@@ -191,15 +201,19 @@ Deno.serve(async req => {
   if (action === 'disconnect') {
     const mailboxEmail = String(requestBody.mailbox_email || '').trim().toLowerCase();
     if (!mailboxEmail.endsWith('@gsdecorating.com')) return json({ error: 'Valid GSD mailbox required' }, 400);
-    const { error } = await db.from('outreach_mailbox_state').update({
+    const { data, error } = await db.from('outreach_mailbox_state').update({
       is_active: false,
       refresh_token_ciphertext: null,
       refresh_token_iv: null,
       gmail_history_id: null,
       watch_expiration: null,
       updated_at: new Date().toISOString(),
-    }).eq('mailbox_email', mailboxEmail);
+    }).eq('mailbox_email', mailboxEmail)
+      .eq('is_active', true)
+      .select('mailbox_email')
+      .maybeSingle();
     if (error) return json({ error: error.message }, 502);
+    if (!data) return json({ error: 'Connected GSD mailbox not found' }, 404);
     return json({ ok: true });
   }
 

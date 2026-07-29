@@ -19,7 +19,7 @@ const errorResult = error => ({
 const clean = value => String(value || '').trim();
 const lower = value => clean(value).toLowerCase();
 const siteNumber = value => clean(value).replace(/^site/i, '');
-const inDateRange = (value, from, to) => {
+export const inDateRange = (value, from, to) => {
   if (!from && !to) return true;
   if (!value) return false;
   const date = String(value).slice(0, 10);
