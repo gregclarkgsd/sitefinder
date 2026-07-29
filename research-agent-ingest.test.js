@@ -41,7 +41,7 @@ test('accepts an HTTPS evidence event', () => {
   assert.equal(message.event.sourceUrl, 'https://example.com/team');
 });
 
-test('rejects non-HTTPS source URLs', () => {
+test('rejects unsafe source URLs and URL secrets', () => {
   assert.throws(() => parseResearchIngestMessage({
     type: 'event.append',
     event: {
@@ -51,7 +51,17 @@ test('rejects non-HTTPS source URLs', () => {
       message: 'Unsafe source.',
       sourceUrl: 'http://example.com/team',
     },
-  }), /Only HTTPS source URLs/u);
+  }), /credential-free HTTPS/u);
+  assert.throws(() => parseResearchIngestMessage({
+    type: 'event.append',
+    event: {
+      runId,
+      sequence: 2,
+      eventType: 'page',
+      message: 'Secret-bearing source.',
+      sourceUrl: 'https://example.com/team?signature=secret#private',
+    },
+  }), /without query or fragment/u);
 });
 
 test('rejects unknown event fields and oversized runs', () => {
@@ -241,6 +251,8 @@ test('all machine-authored detail rows have null human attribution', async () =>
       roleCategory: 'commercial',
       sourceKind: 'company_website',
       sourceUrl: 'https://example.com/team',
+      crmComparison: 'missing_from_both',
+      emailStatus: 'public_email_found',
       confidence: 0.9,
     },
   });

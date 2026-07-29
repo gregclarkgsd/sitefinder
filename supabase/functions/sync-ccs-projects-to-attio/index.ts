@@ -659,12 +659,13 @@ async function findLink(
   entityType: string,
   sourceKey: string,
 ) {
-  const { data } = await db
+  const { data, error } = await db
     .from('attio_sync_links')
     .select('attio_record_id,attio_web_url')
     .eq('entity_type', entityType)
     .eq('source_key', sourceKey)
     .maybeSingle();
+  if (error) throw error;
   return data as LinkRow | null;
 }
 
@@ -685,13 +686,14 @@ async function saveLink(
   },
 ) {
   const now = new Date().toISOString();
-  const { data: existing } = input.status === 'error'
+  const { data: existing, error: existingError } = input.status === 'error'
     ? await db.from('attio_sync_links')
       .select('project_id,attio_record_id,attio_web_url,source_hash,synced_at')
       .eq('entity_type', input.entityType)
       .eq('source_key', input.sourceKey)
       .maybeSingle()
-    : { data: null };
+    : { data: null, error: null };
+  if (existingError) throw existingError;
   const { error } = await db.from('attio_sync_links').upsert({
     entity_type: input.entityType,
     source_key: input.sourceKey,
@@ -903,7 +905,7 @@ async function upsertProjectRecord(
 
   try {
     return existingRecordId
-      ? await attio.replaceRecordValues(object, existingRecordId, values)
+      ? await attio.updateRecord(object, existingRecordId, values)
       : await attio.createRecord(object, optionalValues(values));
   } catch (error) {
     const stageAttribute = findAttribute(attributes, ['stage']);
@@ -913,7 +915,7 @@ async function upsertProjectRecord(
     const withoutStage = { ...values };
     delete withoutStage[stageAttribute.api_slug];
     return existingRecordId
-      ? await attio.replaceRecordValues(object, existingRecordId, withoutStage)
+      ? await attio.updateRecord(object, existingRecordId, withoutStage)
       : await attio.createRecord(object, optionalValues(withoutStage));
   }
 }

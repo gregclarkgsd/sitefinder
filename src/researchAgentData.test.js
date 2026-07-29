@@ -51,7 +51,7 @@ test('maps persisted research rows into the control-room model', () => {
       source_kind: 'company_website',
       source_url: 'https://example.com/team',
       evidence_excerpt: 'Published role evidence.',
-      crm_comparison: 'likely_new',
+      crm_comparison: 'conflicting_multiple_matches',
       email_status: 'not_publicly_found',
       confidence: '0.910',
       review_status: 'pending',
@@ -63,6 +63,10 @@ test('maps persisted research rows into the control-room model', () => {
   assert.equal(result.tasks[0].currentRole, null);
   assert.equal(result.events[0].message, 'Opened a public team page.');
   assert.equal(result.candidates[0].confidence, 0.91);
+  assert.equal(
+    result.candidates[0].crmComparison,
+    'conflicting_multiple_matches',
+  );
 });
 
 test('returns null when no saved run exists', () => {

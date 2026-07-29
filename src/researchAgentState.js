@@ -2,9 +2,50 @@ export const researchEventSteps = [
   'Confirmed the company domain matches the CRM record.',
   'Checked the website rules and allowed pages.',
   'Opened the team page and inspected public staff profiles.',
-  'Compared the relevant role with existing Attio people.',
+  'Compared the exact public work email with Attio and Pipedrive snapshots.',
   'Saved the source URL and evidence for human review.',
 ];
+
+export const minimumResearchApprovalConfidence = 0.65;
+
+const approvableCrmComparisons = new Set([
+  'pipedrive_only',
+  'missing_from_both',
+]);
+
+export function researchCrmComparisonLabel(value) {
+  return {
+    already_in_attio: 'Exact work email already in Attio',
+    pipedrive_only: 'Exact work email in Pipedrive · no exact match in Attio',
+    missing_from_both: 'No exact work-email match in either CRM',
+    conflicting_multiple_matches: 'Conflicting exact-email CRM matches · investigate',
+    unverifiable_no_email: 'Cannot compare · no valid business email',
+  }[value] || 'Unverified CRM comparison';
+}
+
+export function researchCandidateApprovalBlockReason(candidate) {
+  if (!approvableCrmComparisons.has(candidate?.crmComparison)) {
+    return {
+      already_in_attio: 'This exact work email is already present in Attio.',
+      conflicting_multiple_matches: 'Resolve the conflicting exact-email CRM matches before approval.',
+      unverifiable_no_email: 'A public work email is required before CRM comparison and approval.',
+    }[candidate?.crmComparison] || 'A verified exact-email CRM comparison is required before approval.';
+  }
+  if (candidate?.emailStatus !== 'public_email_found') {
+    return 'Only a publicly sourced work email can be approved.';
+  }
+  if (
+    !Number.isFinite(candidate?.confidence)
+    || candidate.confidence < minimumResearchApprovalConfidence
+  ) {
+    return `Evidence confidence must be at least ${Math.round(minimumResearchApprovalConfidence * 100)}%.`;
+  }
+  return '';
+}
+
+export function canApproveResearchCandidate(candidate) {
+  return researchCandidateApprovalBlockReason(candidate) === '';
+}
 
 export function createPreviewResearchRun() {
   return {
@@ -95,8 +136,8 @@ export function createPreviewResearchRun() {
         sourceKind: 'Official company team page',
         sourceUrl: 'https://www.bam.co.uk/',
         evidence: 'The public page associates this person with a relevant commercial role.',
-        crmComparison: 'Likely new · no exact company/name match',
-        emailStatus: 'No public personal email found',
+        crmComparison: 'missing_from_both',
+        emailStatus: 'public_email_found',
         confidence: 0.88,
         reviewStatus: 'pending',
       },
@@ -109,8 +150,8 @@ export function createPreviewResearchRun() {
         sourceKind: 'Official company people page',
         sourceUrl: 'https://www.gallifordtry.co.uk/',
         evidence: 'The public page associates this person with a relevant project-management role.',
-        crmComparison: 'Likely new · no exact company/name match',
-        emailStatus: 'No public personal email found',
+        crmComparison: 'missing_from_both',
+        emailStatus: 'public_email_found',
         confidence: 0.91,
         reviewStatus: 'pending',
       },
@@ -123,8 +164,8 @@ export function createPreviewResearchRun() {
         sourceKind: 'Official company people page',
         sourceUrl: 'https://www.gallifordtry.co.uk/',
         evidence: 'The public page associates this person with a relevant quantity-surveying role.',
-        crmComparison: 'No exact company/name match',
-        emailStatus: 'No public personal email found',
+        crmComparison: 'pipedrive_only',
+        emailStatus: 'public_email_found',
         confidence: 0.89,
         reviewStatus: 'pending',
       },
@@ -137,8 +178,8 @@ export function createPreviewResearchRun() {
         sourceKind: 'Official company people page',
         sourceUrl: 'https://www.gallifordtry.co.uk/',
         evidence: 'The public page associates this person with a relevant procurement role.',
-        crmComparison: 'Possible existing person · needs human confirmation',
-        emailStatus: 'No public personal email found',
+        crmComparison: 'conflicting_multiple_matches',
+        emailStatus: 'public_email_found',
         confidence: 0.84,
         reviewStatus: 'pending',
       },
@@ -151,8 +192,8 @@ export function createPreviewResearchRun() {
         sourceKind: 'Official company supply-chain page',
         sourceUrl: 'https://www.bandk.co.uk/',
         evidence: 'The public page associates this person with a relevant supply-chain role.',
-        crmComparison: 'Possible existing person · needs human confirmation',
-        emailStatus: 'No public personal email found',
+        crmComparison: 'already_in_attio',
+        emailStatus: 'public_email_found',
         confidence: 0.86,
         reviewStatus: 'pending',
       },
@@ -190,6 +231,9 @@ export function reviewCandidate(run, candidateId, decision) {
   const candidates = run.candidates.map(candidate => {
     if (candidate.id !== candidateId) return candidate;
     found = true;
+    if (decision === 'approved' && !canApproveResearchCandidate(candidate)) {
+      throw new Error(researchCandidateApprovalBlockReason(candidate));
+    }
     return {...candidate, reviewStatus: decision, reviewedAt: new Date().toISOString()};
   });
   if (!found) throw new Error(`Research candidate not found: ${candidateId}`);
@@ -201,6 +245,9 @@ export function advancePreviewRun(run) {
   const activeTask = run.tasks.find(task => task.status === 'running');
   if (!activeTask) return run;
   const completedPage = activeTask.currentStep >= researchEventSteps.length - 1;
+  const canInspectAnotherPage =
+    completedPage && activeTask.progress < activeTask.pageCount;
+  if (completedPage && !canInspectAnotherPage) return run;
   const currentStep = completedPage
     ? researchEventSteps.length - 1
     : activeTask.currentStep + 1;
@@ -208,12 +255,14 @@ export function advancePreviewRun(run) {
     ? {
       ...task,
       currentStep,
-      progress: completedPage ? Math.min(task.progress + 1, Math.max(task.pageCount, task.progress + 1)) : task.progress,
+      progress: canInspectAnotherPage
+        ? Math.min(task.progress + 1, task.pageCount)
+        : task.progress,
     }
     : task);
   return {
     ...run,
-    pagesInspected: run.pagesInspected + (completedPage ? 1 : 0),
+    pagesInspected: run.pagesInspected + (canInspectAnotherPage ? 1 : 0),
     tasks,
   };
 }

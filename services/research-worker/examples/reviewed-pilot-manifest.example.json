@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "kind": "reviewed_company_pilot",
+  "companyInputSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "attioPeopleSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "pipedrivePeopleSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "companyIds": [
+    "replace-with-reviewed-company-id"
+  ],
+  "purpose": "Reviewed shadow pilot; no CRM writes and no email sends",
+  "reviewedBy": "reviewer@example.invalid",
+  "reviewedAt": "2026-07-29T12:00:00.000Z"
+}

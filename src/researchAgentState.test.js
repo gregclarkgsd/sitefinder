@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   advancePreviewRun,
+  canApproveResearchCandidate,
   createPreviewResearchRun,
   pendingReviewCount,
   primaryRunControl,
+  researchCrmComparisonLabel,
   requestStopAfterCurrent,
   reviewCandidate,
   setRunStatus,
@@ -27,6 +29,40 @@ test('candidate decisions update the review queue without changing run status', 
   assert.equal(run.candidates[0].reviewStatus, 'pending');
 });
 
+test('approval fails closed on unknown CRM states, missing public email or weak evidence', () => {
+  const candidate = createPreviewResearchRun().candidates[0];
+  assert.equal(canApproveResearchCandidate(candidate), true);
+  assert.equal(canApproveResearchCandidate({...candidate, crmComparison: 'not_checked'}), false);
+  assert.equal(canApproveResearchCandidate({...candidate, emailStatus: 'not_publicly_found'}), false);
+  assert.equal(canApproveResearchCandidate({...candidate, confidence: 0.649}), false);
+  assert.throws(
+    () => reviewCandidate(
+      {
+        ...createPreviewResearchRun(),
+        candidates: [{...candidate, crmComparison: 'unexpected'}],
+      },
+      candidate.id,
+      'approved',
+    ),
+    /verified exact-email CRM comparison/u,
+  );
+});
+
+test('CRM comparison copy describes exact-email evidence and unknown values as unverified', () => {
+  assert.equal(
+    researchCrmComparisonLabel('missing_from_both'),
+    'No exact work-email match in either CRM',
+  );
+  assert.match(
+    researchCrmComparisonLabel('pipedrive_only'),
+    /no exact match in Attio/u,
+  );
+  assert.equal(
+    researchCrmComparisonLabel('unexpected'),
+    'Unverified CRM comparison',
+  );
+});
+
 test('candidates marked for investigation remain in the review queue', () => {
   const run = createPreviewResearchRun();
   const reviewed = reviewCandidate(run, 'preview-candidate', 'investigate');
@@ -39,6 +75,17 @@ test('pause prevents preview progress and resume allows it', () => {
   assert.deepEqual(advancePreviewRun(paused), paused);
   const resumed = setRunStatus(paused, 'running');
   assert.notDeepEqual(advancePreviewRun(resumed), resumed);
+});
+
+test('preview page progress never exceeds the task page count', () => {
+  let run = createPreviewResearchRun();
+  for (let index = 0; index < 30; index += 1) {
+    run = advancePreviewRun(run);
+  }
+  const activeTask = run.tasks.find(task => task.status === 'running');
+  assert.equal(activeTask.progress, activeTask.pageCount);
+  const settled = advancePreviewRun(run);
+  assert.deepEqual(settled, run);
 });
 
 test('offers truthful primary controls for queued, running and paused runs', () => {

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "kind": "cleanup_approval_manifest",
+  "status": "approved",
+  "approvedBy": "cleanup-reviewer@example.invalid",
+  "approvedAt": "2026-07-29T10:05:00.000Z",
+  "ledger": {
+    "sha256": "3a7b3b2c5e251e831719a0ecee5981f8ac850fba4dc8fb71344a21384bc6cdcd",
+    "decisionCount": 6
+  },
+  "note": "Approval binds this exact reviewed ledger; copy both files together."
+}

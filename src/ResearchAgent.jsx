@@ -21,6 +21,8 @@ import {
   createPreviewResearchRun,
   pendingReviewCount,
   primaryRunControl,
+  researchCandidateApprovalBlockReason,
+  researchCrmComparisonLabel,
   requestStopAfterCurrent,
   researchEventSteps,
   reviewCandidate,
@@ -73,6 +75,13 @@ function runStatusLabel(status) {
 function formatTime(value) {
   if (!value) return '—';
   return new Intl.DateTimeFormat('en-GB', {hour: '2-digit', minute: '2-digit'}).format(new Date(value));
+}
+
+function emailStatusLabel(value) {
+  return {
+    public_email_found: 'Public work email found',
+    not_publicly_found: 'No public work email found',
+  }[value] || value || 'Not checked';
 }
 
 function CompanyQueue({tasks, selectedTaskId, onSelect}) {
@@ -170,6 +179,8 @@ function CandidateInspector({
     : candidate.confidence >= 0.65
       ? 'Medium confidence'
       : 'Low confidence';
+  const approvalBlockReason = researchCandidateApprovalBlockReason(candidate);
+  const approvalBlocked = approvalBlockReason !== '';
   const selectCandidate = offset => {
     const next = (candidateIndex + offset + candidates.length) % candidates.length;
     onSelectCandidate(candidates[next].id);
@@ -197,8 +208,8 @@ function CandidateInspector({
     <dl className="candidate-facts">
       <div><dt>Company</dt><dd>{companyName}</dd></div>
       <div><dt>Source</dt><dd><a href={candidate.sourceUrl} target="_blank" rel="noreferrer">{candidate.sourceKind}<ExternalLink size={12}/></a></dd></div>
-      <div><dt>Attio comparison</dt><dd>{candidate.crmComparison}</dd></div>
-      <div><dt>Personal email</dt><dd>{candidate.emailStatus}</dd></div>
+      <div><dt>CRM comparison</dt><dd>{researchCrmComparisonLabel(candidate.crmComparison)}</dd></div>
+      <div><dt>Public work email</dt><dd>{emailStatusLabel(candidate.emailStatus)}</dd></div>
       <div><dt>Evidence</dt><dd>{candidate.evidence}</dd></div>
       <div><dt>Confidence</dt><dd className="confidence"><i><em style={{width: `${candidate.confidence * 100}%`}}/></i><b>{Math.round(candidate.confidence * 100)}%</b></dd></div>
     </dl>
@@ -206,7 +217,13 @@ function CandidateInspector({
     <div className="candidate-actions">
       <button type="button" className={`reject ${candidate.reviewStatus === 'rejected' ? 'selected' : ''}`} onClick={() => onReview('rejected')}><X size={15}/> Reject</button>
       <button type="button" className={`investigate ${candidate.reviewStatus === 'investigate' ? 'selected' : ''}`} onClick={() => onReview('investigate')}><SearchCheck size={15}/> Investigate</button>
-      <button type="button" className={`approve ${candidate.reviewStatus === 'approved' ? 'selected' : ''}`} onClick={() => onReview('approved')}><Check size={15}/> Approve</button>
+      <button
+        type="button"
+        className={`approve ${candidate.reviewStatus === 'approved' ? 'selected' : ''}`}
+        onClick={() => onReview('approved')}
+        disabled={approvalBlocked}
+        title={approvalBlocked ? approvalBlockReason : 'Approve this discovery for a later governed handoff'}
+      ><Check size={15}/> Approve</button>
     </div>
     <p className="research-boundary"><ShieldCheck size={15}/> Approval creates a review decision only. It does not write to Attio or send an email.</p>
   </section>;

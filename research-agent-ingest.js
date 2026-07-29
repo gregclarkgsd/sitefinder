@@ -2,8 +2,17 @@ import {createHash} from 'node:crypto';
 import {z} from 'zod';
 
 const uuid = z.uuid();
-const httpsUrl = z.url().refine(value => new URL(value).protocol === 'https:', {
-  message: 'Only HTTPS source URLs are accepted',
+const httpsUrl = z.url().refine(value => {
+  const url = new URL(value);
+  return (
+    url.protocol === 'https:'
+    && !url.username
+    && !url.password
+    && !url.search
+    && !url.hash
+  );
+}, {
+  message: 'Only credential-free HTTPS source URLs without query or fragment are accepted',
 });
 const domain = z.string()
   .min(3)
@@ -75,8 +84,14 @@ const candidateUpsert = z.object({
     sourceKind: z.string().trim().min(1).max(120),
     sourceUrl: httpsUrl,
     evidenceExcerpt: z.string().trim().max(2000).optional(),
-    crmComparison: z.string().trim().min(1).max(500).default('not_checked'),
-    emailStatus: z.string().trim().min(1).max(120).default('not_publicly_found'),
+    crmComparison: z.enum([
+      'already_in_attio',
+      'pipedrive_only',
+      'missing_from_both',
+      'conflicting_multiple_matches',
+      'unverifiable_no_email',
+    ]),
+    emailStatus: z.enum(['public_email_found', 'not_publicly_found']),
     confidence: z.number().min(0).max(1),
   }).strict(),
 }).strict();

@@ -25,6 +25,32 @@ All `/api/*` routes require either a valid Supabase session belonging to an
 automatically attaches the current Supabase access token. Unauthenticated
 production requests return `401`.
 
+## Team repository workflow
+
+GitHub is the shared source of truth:
+`https://github.com/gregclarkgsd/sitefinder`. Give each laptop its own local
+clone and use branches and pull requests to exchange work.
+
+Do not let multiple laptops work from one iCloud-synchronised `.git` directory.
+iCloud can sync files while Git is updating its internal database, which risks
+conflicts or repository corruption. Keep working clones outside iCloud (for
+example `~/Coding/sitefinder`) and use iCloud only for exported reports,
+screenshots or other non-repository files.
+
+At the start of work on each laptop:
+
+```bash
+cd ~/Coding/sitefinder
+git switch main
+git pull --ff-only
+git status
+```
+
+Create a separate branch for each coherent change. Commit and push that branch,
+then merge it through GitHub only after tests pass. Never copy a `.git`
+directory between laptops, and do not delete an old laptop's clone until all of
+its unpushed branches and stashes have been recovered.
+
 ## Production
 
 The included `render.yaml` builds and serves the React application and Express API as one Render web service. Apply the SQL migration in `supabase/migrations` to a dedicated Supabase project before deploying.
@@ -41,6 +67,14 @@ The production Supabase project runs `sync-ccs-projects` nightly through Supabas
 
 Set the Edge Function secret `CCS_SYNC_TOKEN` to the same value stored in the
 Supabase Vault secret `ccs_sync_token`; do not commit that value.
+
+The nightly job updates SiteFinder and its outreach review queue only. Automatic
+CCS-to-Attio mirroring is disabled by default so an unreviewed project cannot
+enter the CRM accidentally. Keep `CCS_ATTIO_AUTO_SYNC_ENABLED` unset or set to
+anything other than the exact value `true` for the approved-lead-only workflow.
+Setting it to `true` is an explicit operational decision to mirror every new or
+changed CCS project and should be used only after reconciling that broader CRM
+model with the approved-lead handoff.
 
 ## Data source
 
@@ -123,19 +157,29 @@ completion filter includes a dedicated 3–9 month decorating window.
 
 ## Research Agent control room
 
-The **Research Agent** tab is an operator-facing control room for the separate
-GSD Sales enrichment service. Its first release is an explicitly labelled
-preview: it demonstrates the company queue, live page activity, Pause/Resume,
-orderly stop requests, evidence inspection and human candidate decisions
-without starting a crawler or writing to Attio.
+The **Research Agent** tab is an operator-facing control room for the isolated
+worker in `services/research-worker`. The control room remains an explicitly
+labelled preview until an operator starts that separate read-only process: it
+demonstrates the company queue, live page activity, Pause/Resume, orderly stop
+requests, evidence inspection and human candidate decisions without starting a
+crawler or writing to Attio from the browser.
+
+The end-to-end company, CRM, research and Woodpecker relationship is mapped in
+[`RESEARCH-AGENT-WORKFLOW.md`](./RESEARCH-AGENT-WORKFLOW.md).
+
+The worker compiles a company-wide universe from Attio, Pipedrive, SiteFinder
+contractor/client IDs and reviewed files. Cleanup decisions are mandatory:
+quarantined or excluded identities are withheld before they can become normal
+review candidates. Raw CRM inputs and outputs are rejected unless they live in
+an explicitly configured local directory outside Git and iCloud.
 
 The production connection must preserve the same boundary:
 
 - research runs, company tasks, source events and candidate decisions are saved;
 - official source URLs and evidence remain visible to the reviewer;
 - candidates require a human decision;
-- approval may queue a candidate for a separately governed Attio write, but
-  never sends email and never writes to Attio from the preview interface.
+- approval records a review decision only. It does not authorise an Attio
+  write, create a Woodpecker audience or send email.
 
 Migration `20260728185448_add_research_agent_control_room.sql` provides the
 saved read-only run, task, event and candidate-review records. All four tables
@@ -143,6 +187,18 @@ use row-level security for authenticated `@gsdecorating.com` users and publish
 authorised changes through Supabase Realtime. When a saved run exists, the
 control room loads it automatically; otherwise it remains visibly in preview
 mode.
+
+Migration `20260729203556_enforce_research_candidate_approval.sql` keeps the
+approval gate consistent in the browser, server and database. Approval requires
+an exact public work-email result that is either Pipedrive-only or absent from
+both CRM snapshots, plus at least 65% evidence confidence. Unknown, conflicting,
+Attio-existing and no-email states fail closed. If a later worker retry makes an
+approved comparison unsafe, the database returns it to pending review.
+
+Research-candidate approval is not connected to the existing project Outreach
+queue. The approved-lead handoff described below is a separate,
+project-by-project workflow; it must not be treated as a Research Agent
+writeback route.
 
 Pause, Resume, Stop and candidate-review decisions go through authenticated
 SiteFinder server routes. The browser has read-only table grants and cannot
@@ -211,11 +267,17 @@ ATTIO_PROJECT_COMPANY_ATTRIBUTE    # optional relationship slug override
 ATTIO_PROJECT_PEOPLE_ATTRIBUTE     # optional relationship slug override
 ```
 
-The outreach screen presents the Project history from Attio alongside the
-draft. Approving a draft first completes the Attio Project handoff, then sends
-only when the GSD Gmail connection is active. A failed send leaves the approved
-draft available to retry. Woodpecker remains separate and is used for planned
-bulk campaigns, not this project-by-project workflow.
+The outreach screen presents SiteFinder's Gmail communication history alongside
+the draft. Approving a draft first completes the Attio Project handoff, then
+sends only when the GSD Gmail connection is active. A failed send leaves the
+approved draft available to retry only when Gmail definitively rejected the
+request. SiteFinder atomically moves initial and follow-up sends into `sending`
+before calling Gmail. If Gmail accepted the email but SiteFinder could not
+persist the result, or a network failure makes the Gmail outcome unknowable,
+the lead moves to `reconciliation_required`; the function returns
+`reconciliation_required: true` and keeps it non-retryable to prevent a
+duplicate. Woodpecker remains separate and is used for planned bulk campaigns,
+not this project-by-project workflow.
 
 ## GSD Gmail outreach activation
 
@@ -245,10 +307,14 @@ Then:
 3. Open Outreach and select **Add** under Connected GSD mailboxes. Repeat this
    OAuth flow for each authorised `@gsdecorating.com` mailbox. Each refresh
    token is encrypted independently at rest using `MAILBOX_ENCRYPTION_KEY`.
-4. Invoke `connect-gmail-watch` daily for every active mailbox so its watch
-   cannot expire.
-5. Schedule `process-outreach-followups` hourly with
-   `Authorization: Bearer OUTREACH_CRON_SECRET`.
+4. Schedule one daily `connect-gmail-watch` request with
+   `x-sitefinder-cron-secret: OUTREACH_CRON_SECRET` and a valid Supabase gateway
+   authorisation header. Cron mode renews every active mailbox; a signed-in GSD
+   user can still renew one selected mailbox manually. Renewal updates the
+   watch expiration and health only—it never moves the reply-processing history
+   cursor.
+5. Schedule `process-outreach-followups` hourly with the
+   `x-sitefinder-cron-secret: OUTREACH_CRON_SECRET` header.
 6. Send one internal test project to a GSD-owned address before enabling live
    recipients.
 
@@ -258,3 +324,13 @@ communication history and immediately cancel future chasers. Opt-outs also
 enter the suppression list. The default sequence waits five days between
 messages and stops after two follow-ups. A project's first selected sender is
 retained for its complete thread and cannot be changed after the initial email.
+
+The Gmail webhook drains every returned history page before advancing a
+mailbox cursor. Each inbound Gmail message is protected by its provider message
+ID, so a database failure leaves the cursor unchanged and Pub/Sub replay can
+complete the work without adding duplicate communication rows. Missing or
+expired Gmail history cursors are treated as reconciliation errors rather than
+being silently reset. Scheduled watch and follow-up responses return
+`ok: false` with per-mailbox or per-lead results when work is partial; operators
+should investigate those non-success responses instead of assuming the batch
+completed.

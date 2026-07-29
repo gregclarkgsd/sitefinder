@@ -27,6 +27,10 @@ function updateClient(result = {data: {id: runId}, error: null}) {
       calls.push(['in', column, values]);
       return chain;
     },
+    gte(column, value) {
+      calls.push(['gte', column, value]);
+      return chain;
+    },
     select(columns) {
       calls.push(['select', columns]);
       return chain;
@@ -94,12 +98,57 @@ test('records a human review without creating a CRM write', async () => {
     {candidateId, decision: 'investigate'},
     actorId,
   );
-  assert.deepEqual(result, {accepted: true, decision: 'investigate'});
+  assert.deepEqual(result, {
+    accepted: true,
+    decision: 'investigate',
+    crmWritebackAuthorized: false,
+  });
   const update = calls.find(call => call[0] === 'update')[1];
   assert.equal(update.review_status, 'investigate');
   assert.equal(update.reviewed_by, actorId);
   assert.deepEqual(
     calls.filter(call => call[0] === 'from').map(call => call[1]),
     ['research_candidates'],
+  );
+});
+
+test('server-side approval is limited to candidates missing from Attio', async () => {
+  const {client, calls} = updateClient({data: {id: candidateId}, error: null});
+  const result = await applyResearchCandidateReview(
+    client,
+    {candidateId, decision: 'approved'},
+    actorId,
+  );
+  assert.equal(result.crmWritebackAuthorized, false);
+  assert.ok(calls.some(call =>
+    call[0] === 'in'
+    && call[1] === 'crm_comparison'
+    && call[2].includes('pipedrive_only')
+    && call[2].includes('missing_from_both')
+    && !call[2].includes('already_in_attio')
+  ));
+  assert.ok(calls.some(call =>
+    call[0] === 'eq'
+    && call[1] === 'email_status'
+    && call[2] === 'public_email_found'
+  ));
+  assert.ok(calls.some(call =>
+    call[0] === 'gte'
+    && call[1] === 'confidence'
+    && call[2] === 0.65
+  ));
+});
+
+test('returns a conflict when an approval candidate is not eligible', async () => {
+  const {client} = updateClient({data: null, error: null});
+  await assert.rejects(
+    applyResearchCandidateReview(
+      client,
+      {candidateId, decision: 'approved'},
+      actorId,
+    ),
+    error =>
+      error instanceof ResearchActionError &&
+      error.statusCode === 409,
   );
 });
