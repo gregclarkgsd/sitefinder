@@ -111,7 +111,7 @@ function App({session,cloudEnabled}){
   const [attioLinks,setAttioLinks]=useState({}), [enrichment,setEnrichment]=useState({});
   const [tasks,setTasks]=useState([]);
   const [outreachLeads,setOutreachLeads]=useState(()=>cloudEnabled?[]:demoOutreachLeads), [communications,setCommunications]=useState([]), [suppressions,setSuppressions]=useState([]);
-  const [mailboxes,setMailboxes]=useState([]), [mailboxesLoading,setMailboxesLoading]=useState(cloudEnabled);
+  const [mailboxes,setMailboxes]=useState([]), [mailboxesLoading,setMailboxesLoading]=useState(cloudEnabled), [mailboxError,setMailboxError]=useState('');
   const [draftFilters,setDraftFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true}), [filters,setFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true});
   const draftFiltersRef=useRef(draftFilters);
 
@@ -134,16 +134,18 @@ function App({session,cloudEnabled}){
   const loadMailboxes=useCallback(async()=>{
     if(!cloudEnabled){setMailboxesLoading(false);return}
     setMailboxesLoading(true);
+    setMailboxError('');
     const {data,error:mailboxError}=await supabase.functions.invoke('gmail-mailboxes',{body:{action:'list'}});
-    if(mailboxError||data?.error)setError(`Could not load sending mailboxes: ${data?.error||mailboxError?.message}`);
+    if(mailboxError||data?.error)setMailboxError(`Could not load sending mailboxes: ${data?.error||mailboxError?.message}`);
     else setMailboxes(data?.mailboxes||[]);
     setMailboxesLoading(false);
   },[cloudEnabled]);
   useEffect(()=>{if(activeView==='outreach')loadMailboxes()},[activeView,loadMailboxes]);
   const connectMailbox=async()=>{
     if(!cloudEnabled){window.location.assign('https://gsd-sitefinder.onrender.com/?view=outreach');return}
+    setMailboxError('');
     const {data,error:mailboxError}=await supabase.functions.invoke('gmail-mailboxes',{body:{action:'begin'}});
-    if(mailboxError||data?.error||!data?.auth_url){setError(`Could not start Gmail connection: ${data?.error||mailboxError?.message||'No connection URL returned'}`);return}
+    if(mailboxError||data?.error||!data?.auth_url){setMailboxError(`Could not start Gmail connection: ${data?.error||mailboxError?.message||'No connection URL returned'}`);return}
     window.location.assign(data.auth_url);
   };
 
@@ -272,7 +274,7 @@ function App({session,cloudEnabled}){
       </>}
       {activeView==='insights'&&<Insights projects={projects} saved={saved} contractorStats={contractorStats}/>}
       {activeView==='tasks'&&<TaskDashboard tasks={tasks} projects={projects} openProject={open} toggleTask={toggleTask} deleteTask={deleteTask}/>}
-      {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} mailboxes={mailboxes} mailboxesLoading={mailboxesLoading} connectMailbox={connectMailbox} updateLead={updateOutreach} approveAndSend={approveAndSendOutreach}/>}
+      {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} mailboxes={mailboxes} mailboxesLoading={mailboxesLoading} mailboxError={mailboxError} connectMailbox={connectMailbox} updateLead={updateOutreach} approveAndSend={approveAndSendOutreach}/>}
       {activeView==='research'&&<ResearchAgentPage cloudEnabled={cloudEnabled} session={session}/>}
       {activeView==='contractors'&&<Contractors stats={contractorStats} onSelect={name=>{updateDraftFilter('contractor',name);setFilters(x=>({...x,contractor:name}));goToView('projects')}}/>}
     </main>

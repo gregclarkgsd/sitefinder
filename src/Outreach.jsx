@@ -43,7 +43,7 @@ const folderFor = lead => {
 
 const projectType = lead => lead.project_type || lead.project_name || 'New construction opportunity';
 
-export function OutreachPage({ leads, communications, suppressions, mailboxes = [], mailboxesLoading = false, connectMailbox, updateLead, approveAndSend }) {
+export function OutreachPage({ leads, communications, suppressions, mailboxes = [], mailboxesLoading = false, mailboxError = '', connectMailbox, updateLead, approveAndSend }) {
   const [folder, setFolder] = useState('review');
   const [selectedId, setSelectedId] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -138,6 +138,8 @@ export function OutreachPage({ leads, communications, suppressions, mailboxes = 
         </div>
       </div>
     </div>
+
+    {mailboxError && <div className="mailbox-error" role="alert"><ShieldX size={17}/><span>{mailboxError}</span></div>}
 
     <div className="outreach-workspace">
       <aside className="outreach-sidebar" aria-label="Outreach folders">
