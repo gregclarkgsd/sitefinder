@@ -144,6 +144,37 @@ test("produces research seeds only for unambiguous companies with one domain", (
   assert.equal(plan.blockedCompanyIds.length, 2);
 });
 
+test("holds public mailbox provider domains for review instead of crashing cleanup", () => {
+  const result = compileCompanyUniverse({
+    attio: [
+      {
+        sourceId: "public-mailbox-domain",
+        name: "Needs Website Review",
+        domain: "gmail.com",
+        websiteUrl: "https://gmail.com/",
+      },
+      {
+        sourceId: "business-domain",
+        name: "Researchable Build Ltd",
+        domain: "researchable-build.test",
+      },
+    ],
+  });
+
+  const plan = createCompanyResearchPlan(result);
+  assert.deepEqual(
+    plan.companies.map((company) => company.name),
+    ["Researchable Build Ltd"],
+  );
+  assert.ok(
+    result.reviewQueue.some(
+      (item) =>
+        item.kind === "domainless" &&
+        item.sourceKeys.includes("attio:public-mailbox-domain"),
+    ),
+  );
+});
+
 test("research seeds preserve Attio IDs and enforce ID-only cleanup decisions", () => {
   const result = compileCompanyUniverse({
     attio: [

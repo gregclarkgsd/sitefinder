@@ -22,6 +22,6 @@ services:
       - key: RESEARCH_AGENT_INGEST_TOKEN
         sync: false
       - key: RESEARCH_AGENT_INGEST_TOKEN_SHA256
-        value: 11e8dadd07180cd84570f459599fdcae104a78331b93e8a6ee599e0f6285e4e1
+        value: 25dd085e16d197367730a1fc72b94d5efdcf0e23ebbb81f84fd3764ccf09d263
       - key: SITEFINDER_URL
         value: https://gsd-sitefinder.onrender.com
