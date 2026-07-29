@@ -186,17 +186,75 @@ record URL so users can move between the same project in either system.
 
 ## Approved lead handoff to Attio
 
-Only a lead explicitly approved in SiteFinder is asserted into Attio's standard
-Deals object, matched by the unique `CCS Site ID` attribute. Unreviewed CCS
-projects remain in SiteFinder and are never bulk-loaded into the CRM. The Edge
-Function `sync-approved-leads-to-attio` requires a signed-in GSD user and stores
-its API token only in Supabase Edge Function secrets:
+Only a lead explicitly approved in SiteFinder is asserted into Attio's custom
+Projects object, matched by the unique `CCS Site ID` attribute. SiteFinder does
+not create an Attio Deal. A Deal is created later, through the normal sales
+process, only when the customer sends an enquiry or invitation to price.
+
+Before creating CRM records, `sync-approved-leads-to-attio` searches Attio for:
+
+- an existing company by exact trustworthy email domain, falling back to an
+  exact company-name check for generic email domains;
+- an existing person by exact email address; and
+- an existing Project by `CCS Site ID`.
+
+Existing records are reused and linked. A company or person is created only
+when no safe existing match is found; ambiguous matches are held for review.
+Unreviewed CCS projects remain in SiteFinder and are never bulk-loaded into the
+CRM. The function requires a signed-in GSD user and stores its API token only in
+Supabase Edge Function secrets:
 
 ```text
 ATTIO_ACCESS_TOKEN
 ATTIO_DEFAULT_OWNER_ID
+ATTIO_PROJECT_COMPANY_ATTRIBUTE    # optional relationship slug override
+ATTIO_PROJECT_PEOPLE_ATTRIBUTE     # optional relationship slug override
 ```
 
-Approval does not send email. It creates or updates the Attio deal and records
-the Attio record ID, sync time and any error against the outreach lead. Email
-sending remains locked until Sam's mailbox is deliberately connected.
+The outreach screen presents the Project history from Attio alongside the
+draft. Approving a draft first completes the Attio Project handoff, then sends
+only when the GSD Gmail connection is active. A failed send leaves the approved
+draft available to retry. Woodpecker remains separate and is used for planned
+bulk campaigns, not this project-by-project workflow.
+
+## GSD Gmail outreach activation
+
+The Gmail functions are deployed but remain unable to send until an authorised
+GSD mailbox is deliberately connected. Configure these server-only Supabase
+Edge Function secrets:
+
+```text
+GMAIL_CLIENT_ID
+GMAIL_CLIENT_SECRET
+GMAIL_PUBSUB_TOPIC
+GMAIL_WEBHOOK_SECRET
+OUTREACH_CRON_SECRET
+MAILBOX_ENCRYPTION_KEY
+SITEFINDER_URL
+```
+
+Then:
+
+1. Add the Supabase function callback URL
+   `https://oihmehqrwdvajzyxvuhz.supabase.co/functions/v1/gmail-mailboxes`
+   to the Google OAuth application's authorised redirect URIs.
+2. Create a Google Cloud Pub/Sub push subscription for the Gmail topic. Point
+   it to
+   `https://oihmehqrwdvajzyxvuhz.supabase.co/functions/v1/gmail-outreach-webhook?token=GMAIL_WEBHOOK_SECRET`,
+   replacing the placeholder with the configured secret.
+3. Open Outreach and select **Add** under Connected GSD mailboxes. Repeat this
+   OAuth flow for each authorised `@gsdecorating.com` mailbox. Each refresh
+   token is encrypted independently at rest using `MAILBOX_ENCRYPTION_KEY`.
+4. Invoke `connect-gmail-watch` daily for every active mailbox so its watch
+   cannot expire.
+5. Schedule `process-outreach-followups` hourly with
+   `Authorization: Bearer OUTREACH_CRON_SECRET`.
+6. Send one internal test project to a GSD-owned address before enabling live
+   recipients.
+
+Initial messages and chasers are stored against the SiteFinder lead with Gmail
+message/thread IDs. Replies, bounces and opt-outs are written to the
+communication history and immediately cancel future chasers. Opt-outs also
+enter the suppression list. The default sequence waits five days between
+messages and stops after two follow-ups. A project's first selected sender is
+retained for its complete thread and cannot be changed after the initial email.

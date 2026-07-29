@@ -1,5 +1,20 @@
-import React, { useMemo, useState } from 'react';
-import { Check, CheckCircle2, Clock3, ExternalLink, Mail, MessageSquareText, Phone, Send, ShieldX, SkipForward, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Check,
+  CheckCircle2,
+  Clock3,
+  ExternalLink,
+  Inbox,
+  Mail,
+  MessageCircle,
+  MessageSquareText,
+  Pencil,
+  Phone,
+  Plus,
+  Send,
+  ShieldCheck,
+  ShieldX,
+} from 'lucide-react';
 import './outreach.css';
 
 const formatDate = value => value
@@ -7,145 +22,220 @@ const formatDate = value => value
   : 'Not yet';
 
 const statusLabel = status => ({
-  queued: 'Ready for review',
-  reviewing: 'Draft in progress',
-  approved: 'Approved',
-  sent: 'Sent',
-  skipped: 'Skipped',
+  queued: 'Needs review',
+  reviewing: 'Needs review',
+  approved: 'Ready to send',
+  sent: 'Waiting for reply',
+  followup_due: 'Follow-up due',
+  skipped: 'Saved for later',
   replied: 'Replied',
   bounced: 'Bounced',
   failed: 'Failed',
   suppressed: 'Do not contact',
 }[status] || status);
 
-export function OutreachPage({ leads, communications, suppressions, updateLead, syncToAttio }) {
-  const [view,setView] = useState('review');
-  const [selectedIds,setSelectedIds] = useState(()=>new Set());
-  const [editing,setEditing] = useState(null);
-  const [saving,setSaving] = useState(false);
+const folderFor = lead => {
+  if (lead.status === 'approved') return 'ready';
+  if (lead.status === 'followup_due') return 'followup';
+  if (lead.status === 'sent') return 'waiting';
+  return 'review';
+};
+
+const projectType = lead => lead.project_type || lead.project_name || 'New construction opportunity';
+
+export function OutreachPage({ leads, communications, suppressions, mailboxes = [], mailboxesLoading = false, connectMailbox, updateLead, approveAndSend }) {
+  const [folder, setFolder] = useState('review');
+  const [selectedId, setSelectedId] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [followUp, setFollowUp] = useState(true);
+  const [senderEmail, setSenderEmail] = useState('');
+  const [notice, setNotice] = useState('');
+  const [noticeKind, setNoticeKind] = useState('success');
 
   const suppressionEmails = useMemo(
-    () => new Set(suppressions.map(item=>item.email.toLowerCase())),
+    () => new Set(suppressions.map(item => item.email.toLowerCase())),
     [suppressions],
   );
-  const reviewLeads = leads.filter(lead=>['queued','reviewing'].includes(lead.status));
-  const approvedLeads = leads.filter(lead=>lead.status==='approved');
-  const historyLeads = leads.filter(lead=>!['queued','reviewing','approved'].includes(lead.status));
-  const visible = view==='review' ? reviewLeads : view==='approved' ? approvedLeads : historyLeads;
-  const sentCount = leads.filter(lead=>['sent','replied'].includes(lead.status)).length;
+  const folders = useMemo(() => ([
+    { id: 'review', label: 'Needs review', icon: Inbox, count: leads.filter(lead => folderFor(lead) === 'review').length },
+    { id: 'ready', label: 'Ready to send', icon: Send, count: leads.filter(lead => folderFor(lead) === 'ready').length },
+    { id: 'waiting', label: 'Waiting for reply', icon: MessageCircle, count: leads.filter(lead => folderFor(lead) === 'waiting').length },
+    { id: 'followup', label: 'Follow-up due', icon: Clock3, count: leads.filter(lead => folderFor(lead) === 'followup').length },
+  ]), [leads]);
+  const visible = useMemo(
+    () => leads.filter(lead => folderFor(lead) === folder),
+    [folder, leads],
+  );
+  const selected = visible.find(lead => lead.id === selectedId) || visible[0] || null;
+  const projectCommunications = selected
+    ? communications.filter(item => item.project_id === selected.project_id)
+    : [];
+  const suppressed = Boolean(selected?.recipient_email
+    && suppressionEmails.has(selected.recipient_email.toLowerCase()));
+  const selectedMailbox = mailboxes.find(mailbox => mailbox.mailbox_email === senderEmail) || null;
 
-  const toggle = id => setSelectedIds(current=>{
-    const next = new Set(current);
-    next.has(id) ? next.delete(id) : next.add(id);
-    return next;
-  });
+  useEffect(() => {
+    if (!selected) return;
+    setSelectedId(selected.id);
+    setSubject(selected.email_subject || `Painting and spray support for ${selected.project_name}`);
+    setBody((selected.email_body || `Hi ${selected.recipient_name?.split(' ')[0] || 'there'},\n\nI came across ${selected.project_name} and wanted to introduce GSD Decorating.\n\nWe are a specialist painting, decorating and spray contractor supporting main contractors across London and the South. We would welcome the opportunity to price the relevant packages for this project.\n\nWould it be useful if I sent over a short capability summary and examples of similar work?\n\nKind regards,\nSam Ward\nGSD Decorating`).replaceAll('\\n', '\n'));
+    setEditing(false);
+    const assignedMailbox = mailboxes.find(mailbox => mailbox.mailbox_email === selected.sender_email);
+    setSenderEmail(assignedMailbox?.mailbox_email || mailboxes[0]?.mailbox_email || '');
+    setNotice('');
+    setNoticeKind('success');
+  }, [selected?.id, mailboxes]);
 
-  const approveSelected = async () => {
-    const selected = leads.filter(lead=>selectedIds.has(lead.id)
-      && lead.recipient_email
-      && !suppressionEmails.has(lead.recipient_email.toLowerCase()));
-    if (!selected.length) return;
+  const saveLead = async changes => {
+    if (!selected) return;
     setSaving(true);
-    for (const lead of selected) {
-      await updateLead(lead,{
-        status:'approved',
-        approved_at:new Date().toISOString(),
-      });
-    }
-    setSelectedIds(new Set());
+    const ok = await updateLead(selected, changes);
     setSaving(false);
+    return ok;
   };
 
-  return <section className="outreach-page">
+  const approve = async () => {
+    setSaving(true);
+    const changes = {
+      status: 'approved',
+      approved_at: new Date().toISOString(),
+      email_subject: subject,
+      email_body: body,
+      follow_up_enabled: followUp,
+      sender_email: senderEmail,
+    };
+    const result = approveAndSend
+      ? await approveAndSend(selected, changes)
+      : { ok: await updateLead(selected, changes), sent: false };
+    setSaving(false);
+    if (result?.ok) {
+      setNoticeKind('success');
+      setNotice(result.sent
+        ? 'Email sent from the GSD mailbox. Replies and follow-ups will be logged automatically.'
+        : 'Approved safely. This email is ready, but it will not send until the GSD mailbox connection is enabled.');
+      setEditing(false);
+    } else {
+      setNoticeKind('error');
+      setNotice(result?.error || 'The email was not sent. The approved draft remains safely in the queue.');
+    }
+  };
+
+  return <section className="outreach-page outreach-inbox">
     <div className="outreach-heading">
       <div>
-        <h1>Outreach</h1>
-        <p>Review every new CCS lead before anything is sent.</p>
+        <h1>Sales Outreach Agent</h1>
+        <p>Review and send personalised project outreach from your connected GSD mailbox.</p>
       </div>
-      <div className="sender-state">
-        <span><Mail size={16}/> Sender</span>
-        <strong>samward@gsdecorating.com</strong>
-        <small>Connection required before sending</small>
+      <div className="outreach-heading-actions">
+        <a href="https://app.woodpecker.co/" target="_blank" rel="noreferrer">Bulk campaign? Use Woodpecker <ExternalLink size={14}/></a>
+        <div className="sender-state mailbox-summary">
+          <Mail size={17}/>
+          <div><span>Connected GSD mailboxes</span><strong>{mailboxesLoading ? 'Checking…' : `${mailboxes.length} available`}</strong><small>Choose the sender on each project</small></div>
+          <button type="button" onClick={connectMailbox}><Plus size={14}/> Add</button>
+        </div>
       </div>
     </div>
 
-    <div className="outreach-stats">
-      <article><Clock3/><div><span>Ready for review</span><strong>{reviewLeads.length}</strong></div></article>
-      <article><CheckCircle2/><div><span>Approved</span><strong>{approvedLeads.length}</strong></div></article>
-      <article><Send/><div><span>Sent or replied</span><strong>{sentCount}</strong></div></article>
-      <article><ShieldX/><div><span>Do not contact</span><strong>{suppressions.length}</strong></div></article>
-    </div>
-
-    <div className="outreach-panel">
-      <div className="outreach-tabs" role="tablist" aria-label="Outreach queue views">
-        <button className={view==='review'?'active':''} onClick={()=>setView('review')}>Review <span>{reviewLeads.length}</span></button>
-        <button className={view==='approved'?'active':''} onClick={()=>setView('approved')}>Approved <span>{approvedLeads.length}</span></button>
-        <button className={view==='history'?'active':''} onClick={()=>setView('history')}>History <span>{historyLeads.length}</span></button>
-        {view==='review'&&<button className="approve-selected" disabled={!selectedIds.size||saving} onClick={approveSelected}><Check size={15}/> Approve selected ({selectedIds.size})</button>}
-      </div>
-
-      {visible.length===0
-        ? <div className="outreach-empty"><Mail/><h2>{view==='review'?'No new leads waiting':'Nothing here yet'}</h2><p>{view==='review'?'Future nightly CCS discoveries will appear here automatically. You can also add an existing project from its detail panel.':'Approved and completed outreach will appear in this view.'}</p></div>
-        : <div className="outreach-list">
-          <div className="outreach-list-head"><span>Lead</span><span>Contact</span><span>Company</span><span>Status</span><span>Added</span><span/></div>
-          {visible.map(lead=>{
-            const suppressed = lead.recipient_email&&suppressionEmails.has(lead.recipient_email.toLowerCase());
-            return <article className="outreach-row" key={lead.id}>
-              <div className="lead-cell">
-                {view==='review'&&<input type="checkbox" disabled={!lead.recipient_email||suppressed} checked={selectedIds.has(lead.id)} onChange={()=>toggle(lead.id)} aria-label={`Select ${lead.project_name}`}/>}
-                <div><strong>{lead.project_name}</strong><small>CCS {lead.project_id.replace('site','')}</small></div>
-              </div>
-              <div><strong>{lead.recipient_name||'Site contact'}</strong><small>{lead.recipient_email||'No email published'}</small></div>
-              <div>{lead.company_name||'Not published'}</div>
-              <div><span className={`outreach-status status-${suppressed?'suppressed':lead.status}`}>{suppressed?'Do not contact':statusLabel(lead.status)}</span>{lead.status==='approved'&&<small>{lead.attio_record_id?'CRM synced':lead.attio_sync_error?'CRM error':'CRM pending'}</small>}</div>
-              <div>{formatDate(lead.created_at)}</div>
-              <div><button className="review-lead" onClick={()=>setEditing(lead)}>{view==='history'?'View':'Review'}</button></div>
-            </article>;
+    <div className="outreach-workspace">
+      <aside className="outreach-sidebar" aria-label="Outreach folders">
+        <nav>
+          {folders.map(item => {
+            const Icon = item.icon;
+            return <button key={item.id} className={folder === item.id ? 'active' : ''} onClick={() => { setFolder(item.id); setSelectedId(null); }}>
+              <Icon size={19}/><span>{item.label}</span><b>{item.count}</b>
+            </button>;
           })}
-        </div>}
-    </div>
+        </nav>
+        <div className="conversation-label">Projects</div>
+        <div className="conversation-list">
+          {visible.length === 0
+            ? <p>No projects in this folder.</p>
+            : visible.map(lead => <button key={lead.id} className={selected?.id === lead.id ? 'active' : ''} onClick={() => setSelectedId(lead.id)}>
+              <i/>
+              <span><strong>{lead.company_name || lead.project_name}</strong><small>{lead.project_name}</small></span>
+              <time>{new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short' }).format(new Date(lead.updated_at || lead.created_at))}</time>
+            </button>)}
+        </div>
+      </aside>
 
-    <div className="outreach-notice">
-      <ShieldX size={18}/>
-      <div><strong>Sending remains locked until Sam’s mailbox is connected.</strong><p>Approved messages stay in SiteFinder and cannot be sent accidentally. Suppressed addresses are clearly blocked.</p></div>
-    </div>
+      <main className="outreach-detail">
+        {!selected
+          ? <div className="outreach-empty"><Mail/><h2>Nothing needs attention here</h2><p>New SiteFinder opportunities will appear automatically.</p></div>
+          : <>
+            <header className="outreach-project-head">
+              <div><h2>{selected.company_name || selected.project_name}</h2><p>{selected.project_name} · CCS {selected.project_id.replace('site', '')}</p></div>
+              <small>Updated {formatDate(selected.updated_at || selected.created_at)}</small>
+            </header>
 
-    {editing&&<OutreachComposer lead={editing} suppressed={Boolean(editing.recipient_email&&suppressionEmails.has(editing.recipient_email.toLowerCase()))} communications={communications.filter(item=>item.project_id===editing.project_id)} close={()=>setEditing(null)} save={async changes=>{setSaving(true);const ok=await updateLead(editing,changes);setSaving(false);if(ok)setEditing(null)}} syncToAttio={syncToAttio} saving={saving}/>}
+            <div className="outreach-timeline" aria-label="Outreach progress">
+              {[
+                ['New project found', selected.created_at],
+                ['Research complete', selected.created_at],
+                ['Project linked to Attio', selected.attio_synced_at],
+                ['Email draft ready', selected.updated_at || selected.created_at],
+              ].map(([label, date]) => <div key={label}><CheckCircle2 size={21}/><strong>{label}</strong><small>{date ? formatDate(date) : 'Ready for review'}</small></div>)}
+            </div>
+
+            <div className="outreach-project-facts">
+              <div><span>Project</span><strong>{projectType(selected)}</strong></div>
+              <div><span>Company</span><strong>{selected.company_name || 'Not published'}</strong></div>
+              <div><span>Best contact</span><strong>{selected.recipient_name || 'Site contact'}</strong></div>
+              <div><span>CRM status</span><strong className={selected.attio_record_id ? 'positive' : ''}>{selected.attio_record_id ? 'Project linked in Attio' : 'Project sync pending'}</strong></div>
+            </div>
+
+            <section className="email-draft">
+              <div className="email-draft-title">
+                <h3>Email draft</h3>
+                {!editing && <button onClick={() => setEditing(true)}><Pencil size={14}/> Edit</button>}
+              </div>
+              <div className="email-address-line">
+                <label className="sender-picker">From:
+                  <select value={senderEmail} onChange={event => setSenderEmail(event.target.value)} disabled={mailboxesLoading || mailboxes.length === 0 || Boolean(selected.gmail_message_id)}>
+                    {mailboxes.length === 0
+                      ? <option value="">No mailbox connected</option>
+                      : mailboxes.map(mailbox => <option key={mailbox.mailbox_email} value={mailbox.mailbox_email}>{mailbox.display_name ? `${mailbox.display_name} — ` : ''}{mailbox.mailbox_email}</option>)}
+                  </select>
+                </label>
+                <span>To: <strong>{selected.recipient_email || 'No verified email'}</strong></span>
+                {selected.recipient_email && !suppressed && <em><ShieldCheck size={14}/> Verified</em>}
+              </div>
+              <label>Subject<input value={subject} onChange={event => setSubject(event.target.value)} readOnly={!editing}/></label>
+              <label>Message<textarea rows="10" value={body} onChange={event => setBody(event.target.value)} readOnly={!editing}/></label>
+              {editing && <div className="edit-actions"><button onClick={() => setEditing(false)}>Done editing</button></div>}
+              {suppressed && <div className="suppressed-warning"><ShieldX size={17}/><strong>This address is on the do-not-contact list.</strong></div>}
+            </section>
+
+            <section className="outreach-send-row">
+              <label className="followup-setting">
+                <input type="checkbox" checked={followUp} onChange={event => setFollowUp(event.target.checked)}/>
+                <span><strong>If there is no reply, follow up in 5 days</strong><small>A final follow-up is due after 10 days. Any reply stops the chase.</small></span>
+              </label>
+              <button className="approve-send" disabled={saving || suppressed || !selected.recipient_email || !selectedMailbox || !subject.trim() || !body.trim()} onClick={approve}><Send size={17}/> Approve and send</button>
+            </section>
+
+            {notice && <div className={`outreach-success ${noticeKind === 'error' ? 'error' : ''}`}>{noticeKind === 'error' ? <ShieldX size={17}/> : <Check size={17}/>}<span>{notice}</span></div>}
+
+            <div className="next-step">
+              <strong>What you need to do next:</strong>
+              <span>Review the email above. If you are happy, approve it. Replies and follow-ups will be recorded in Attio.</span>
+            </div>
+
+            {projectCommunications.length > 0 && <section className="conversation-history"><h3>Conversation history</h3><CommunicationTimeline communications={projectCommunications}/></section>}
+          </>}
+      </main>
+    </div>
   </section>;
 }
 
-function OutreachComposer({lead,suppressed,communications,close,save,syncToAttio,saving}) {
-  const [subject,setSubject] = useState(lead.email_subject||'');
-  const [body,setBody] = useState(lead.email_body||'');
-  const readonly = ['sent','replied','bounced','suppressed'].includes(lead.status);
-
-  return <div className="composer-backdrop" role="presentation">
-    <section className="outreach-composer" role="dialog" aria-modal="true" aria-label={`Review outreach for ${lead.project_name}`}>
-      <header><div><h2>{lead.project_name}</h2><p>Review the recipient and wording before approval.</p></div><button onClick={close} aria-label="Close outreach review"><X/></button></header>
-      <div className="composer-addresses">
-        <label>From<input value="samward@gsdecorating.com — not connected" readOnly/></label>
-        <label>To<input value={lead.recipient_email||'No email published by CCS'} readOnly/></label>
-      </div>
-      <label>Subject<input value={subject} onChange={event=>setSubject(event.target.value)} readOnly={readonly}/></label>
-      <label>Message<textarea rows="12" value={body} onChange={event=>setBody(event.target.value)} readOnly={readonly}/></label>
-      {suppressed&&<div className="suppressed-warning"><ShieldX size={17}/><strong>This address is on the do-not-contact list and cannot be approved.</strong></div>}
-      <div className="composer-history"><h3>Communication history</h3><CommunicationTimeline communications={communications}/></div>
-      {lead.status==='approved'&&<div className="crm-state"><strong>{lead.attio_record_id?'Synced to Attio':lead.attio_sync_error?'Attio sync needs attention':'Waiting to sync to Attio'}</strong>{lead.attio_sync_error&&<small>{lead.attio_sync_error}</small>}{lead.attio_web_url&&<a href={lead.attio_web_url} target="_blank" rel="noreferrer">Open Attio Deal <ExternalLink size={14}/></a>}{lead.attio_project_url&&<a href={lead.attio_project_url} target="_blank" rel="noreferrer">Open Attio Project <ExternalLink size={14}/></a>}{!lead.attio_record_id&&<button type="button" disabled={saving} onClick={()=>syncToAttio(lead)}>Retry Attio sync</button>}</div>}
-      {!readonly&&<footer>
-        <button className="skip" disabled={saving} onClick={()=>save({status:'skipped',skipped_at:new Date().toISOString(),email_subject:subject,email_body:body})}><SkipForward size={15}/> Skip</button>
-        <button disabled={saving} onClick={()=>save({status:'reviewing',email_subject:subject,email_body:body})}>Save draft</button>
-        <button className="approve" disabled={saving||suppressed||!lead.recipient_email||!subject.trim()||!body.trim()} onClick={()=>save({status:'approved',approved_at:new Date().toISOString(),email_subject:subject,email_body:body})}><Check size={15}/> Approve</button>
-      </footer>}
-    </section>
-  </div>;
-}
-
-export function CommunicationTimeline({communications}) {
+export function CommunicationTimeline({ communications }) {
   if (!communications.length) return <p className="communication-empty">No communication recorded for this project yet.</p>;
   return <div className="communication-timeline">{communications
-    .toSorted((a,b)=>new Date(b.occurred_at)-new Date(a.occurred_at))
-    .map(item=><article key={item.id}>
-      <div className="communication-icon">{item.channel==='phone'?<Phone size={15}/>:item.channel==='email'?<Mail size={15}/>:<MessageSquareText size={15}/>}</div>
-      <div><strong>{item.subject||`${item.direction==='inbound'?'Incoming':'Logged'} ${item.channel}`}</strong><p>{item.body||'No notes added.'}</p><small>{formatDate(item.occurred_at)} · {statusLabel(item.status)}</small></div>
+    .toSorted((a, b) => new Date(b.occurred_at) - new Date(a.occurred_at))
+    .map(item => <article key={item.id}>
+      <div className="communication-icon">{item.channel === 'phone' ? <Phone size={15}/> : item.channel === 'email' ? <Mail size={15}/> : <MessageSquareText size={15}/>}</div>
+      <div><strong>{item.subject || `${item.direction === 'inbound' ? 'Incoming' : 'Logged'} ${item.channel}`}</strong><p>{item.body || 'No notes added.'}</p><small>{formatDate(item.occurred_at)} · {statusLabel(item.status)}</small></div>
     </article>)}</div>;
 }

@@ -1,52 +1,12 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
-import { createClient } from 'npm:@supabase/supabase-js@2.110.7';
-import {
-  AttioAttribute,
-  AttioClient,
-  AttioError,
-  errorMessage,
-  findAttribute,
-  optionalValues,
-  recordReference,
-} from '../_shared/attio.ts';
+import { createClient } from 'npm:@supabase/supabase-js@2';
 
+const ATTIO_API = 'https://api.attio.com/v2';
 const SITEFINDER_URL = 'https://gsd-sitefinder.onrender.com';
-
-type JsonRecord = Record<string, unknown>;
-
-const DEAL_ATTRIBUTES = [
-  {
-    title: 'CCS Site ID',
-    api_slug: 'ccs_site_id',
-    type: 'text',
-    description: 'Stable Considerate Constructors Scheme site identifier.',
-    is_unique: true,
-  },
-  {
-    title: 'Open in SiteFinder',
-    api_slug: 'sitefinder_url',
-    type: 'text',
-    description: 'Opens the correct project in GSD SiteFinder.',
-  },
-  {
-    title: 'Attio Project',
-    api_slug: 'sitefinder_project_url',
-    type: 'text',
-    description: 'Opens the source Project record in Attio.',
-  },
-  {
-    title: 'CCS Source',
-    api_slug: 'ccs_source_url',
-    type: 'text',
-    description: 'Verified source record from the Considerate Constructors Scheme.',
-  },
-  {
-    title: 'SiteFinder Synced At',
-    api_slug: 'sitefinder_synced_at',
-    type: 'timestamp',
-    description: 'Last successful SiteFinder update of this deal.',
-  },
-];
+const GENERIC_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'hotmail.com', 'outlook.com', 'live.com',
+  'icloud.com', 'me.com', 'yahoo.com', 'aol.com', 'proton.me', 'protonmail.com',
+]);
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -55,89 +15,151 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function projectUrl(projectId: string) {
-  return `${SITEFINDER_URL}/?project=${encodeURIComponent(projectId)}`;
-}
-
-function sourceUrl(projectId: string) {
-  return `https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails/${projectId.replace(/^site/, '')}/null`;
-}
-
-function put(
-  values: Record<string, unknown>,
-  attributes: AttioAttribute[],
-  aliases: string[],
-  value: unknown,
-) {
-  if (value === null || value === undefined || value === '') return;
-  const attribute = findAttribute(attributes, aliases);
-  if (!attribute?.is_writable) return;
-  if (attribute.type === 'number') {
-    const number = Number(value);
-    if (Number.isFinite(number)) values[attribute.api_slug] = number;
-  } else if (attribute.type === 'date') {
-    values[attribute.api_slug] = String(value).slice(0, 10);
-  } else if (attribute.type === 'timestamp') {
-    values[attribute.api_slug] = new Date(String(value)).toISOString();
-  } else if (['text', 'status', 'select'].includes(attribute.type)) {
-    values[attribute.api_slug] = String(value);
-  }
-}
-
-function putReference(
-  values: Record<string, unknown>,
-  attributes: AttioAttribute[],
-  aliases: string[],
-  object: string,
-  recordId: string | null,
-) {
-  if (!recordId) return;
-  const attribute = attributes.find(candidate =>
-    candidate.type === 'record-reference' && findAttribute([candidate], aliases)
+function optionalValues(values: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(values).filter(([, value]) => value !== null && value !== undefined && value !== ''),
   );
-  if (attribute?.is_writable) values[attribute.api_slug] = recordReference(object, recordId);
 }
 
-async function ensureDealAttributes(attio: AttioClient, attributes: AttioAttribute[]) {
-  const output = [...attributes];
-  const warnings: string[] = [];
-  for (const definition of DEAL_ATTRIBUTES) {
-    if (findAttribute(output, [definition.api_slug, definition.title])) continue;
+function normaliseEmail(value: unknown) {
+  const email = String(value || '').trim().toLowerCase();
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email : '';
+}
+
+function normaliseName(value: unknown) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function recordId(record: any) {
+  return String(record?.id?.record_id || '');
+}
+
+async function attioFetch(token: string, path: string, init: RequestInit = {}) {
+  const response = await fetch(`${ATTIO_API}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...(init.headers || {}),
+    },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(String(body?.message || `Attio returned ${response.status}`).slice(0, 1000));
+  }
+  return body;
+}
+
+async function queryRecords(token: string, object: string, filter: Record<string, unknown>) {
+  const body = await attioFetch(token, `/objects/${object}/records/query`, {
+    method: 'POST',
+    body: JSON.stringify({ filter, limit: 10 }),
+  });
+  return Array.isArray(body?.data) ? body.data : [];
+}
+
+async function createRecord(token: string, object: string, values: Record<string, unknown>) {
+  const body = await attioFetch(token, `/objects/${object}/records`, {
+    method: 'POST',
+    body: JSON.stringify({ data: { values } }),
+  });
+  return body?.data;
+}
+
+async function findOrCreateCompany(token: string, companyName: string, email: string) {
+  const domain = email.split('@')[1] || '';
+  const trustedDomain = domain && !GENERIC_EMAIL_DOMAINS.has(domain) ? domain : '';
+
+  if (trustedDomain) {
+    const matches = await queryRecords(token, 'companies', {
+      domains: { domain: { $eq: trustedDomain } },
+    });
+    if (matches.length) return { record: matches[0], created: false, matched_by: 'domain' };
     try {
-      output.push(await attio.createAttribute('deals', definition));
+      const record = await createRecord(token, 'companies', optionalValues({
+        domains: [trustedDomain],
+        name: companyName,
+      }));
+      return { record, created: true, matched_by: 'domain' };
     } catch (error) {
-      warnings.push(`Could not create ${definition.title}: ${errorMessage(error)}`);
+      // A concurrent sync may have created the unique domain after our query.
+      const retry = await queryRecords(token, 'companies', {
+        domains: { domain: { $eq: trustedDomain } },
+      });
+      if (retry.length) return { record: retry[0], created: false, matched_by: 'domain' };
+      throw error;
     }
   }
-  return { attributes: output, warnings };
+
+  if (!companyName) return { record: null, created: false, matched_by: null };
+  const matches = await queryRecords(token, 'companies', { name: companyName });
+  const exact = matches.filter((record: any) => {
+    const names = Array.isArray(record?.values?.name) ? record.values.name : [];
+    return names.some((value: any) => normaliseName(value?.value).toLowerCase() === companyName.toLowerCase());
+  });
+  // A name without a domain is not safe enough to create automatically.
+  return exact.length === 1
+    ? { record: exact[0], created: false, matched_by: 'exact_name' }
+    : { record: null, created: false, matched_by: null };
 }
 
-async function ensureProjectReference(
-  attio: AttioClient,
-  attributes: AttioAttribute[],
-  projectObject: string,
+async function findOrCreatePerson(
+  token: string,
+  personName: string,
+  email: string,
+  companyRecordId: string,
 ) {
-  const existing = attributes.find(attribute =>
-    attribute.type === 'record-reference'
-    && findAttribute([attribute], ['sitefinder_project', 'project', 'attio project'])
-  );
-  if (existing) return { attribute: existing, warning: null };
+  if (!email) return { record: null, created: false, matched_by: null };
+  const matches = await queryRecords(token, 'people', {
+    email_addresses: { email_address: { $eq: email } },
+  });
+  if (matches.length) return { record: matches[0], created: false, matched_by: 'email' };
+
+  const names = personName.split(' ').filter(Boolean);
+  const firstName = names.shift() || '';
+  const lastName = names.join(' ');
+  const values = optionalValues({
+    email_addresses: [email],
+    name: personName ? [{ first_name: firstName, last_name: lastName, full_name: personName }] : null,
+    company: companyRecordId ? [{
+      target_object: 'companies',
+      target_record_id: companyRecordId,
+    }] : null,
+  });
   try {
-    const attribute = await attio.createAttribute('deals', {
-      title: 'SiteFinder Project Record',
-      api_slug: 'sitefinder_project',
-      type: 'record-reference',
-      description: 'The source SiteFinder project represented by this deal.',
-      config: { record_reference: { allowed_objects: [projectObject] } },
-    });
-    attributes.push(attribute);
-    return { attribute, warning: null };
+    const record = await createRecord(token, 'people', values);
+    return { record, created: true, matched_by: 'email' };
   } catch (error) {
-    return {
-      attribute: null,
-      warning: `Could not create the Deal to Project relationship: ${errorMessage(error)}`,
-    };
+    const retry = await queryRecords(token, 'people', {
+      email_addresses: { email_address: { $eq: email } },
+    });
+    if (retry.length) return { record: retry[0], created: false, matched_by: 'email' };
+    throw error;
   }
+}
+
+async function projectAttributes(token: string) {
+  const body = await attioFetch(token, '/objects/projects/attributes?limit=200');
+  return Array.isArray(body?.data) ? body.data : [];
+}
+
+function relationshipSlug(
+  attributes: any[],
+  target: 'companies' | 'people',
+  envOverride: string | undefined,
+) {
+  if (envOverride && attributes.some(attribute => attribute.api_slug === envOverride)) return envOverride;
+  const titlePattern = target === 'companies'
+    ? /(company|companies|contractor|organisation|organization)/i
+    : /(person|people|contact|contacts)/i;
+  return attributes.find(attribute => {
+    if (attribute.type !== 'record-reference') return false;
+    const relationshipObject = String(attribute?.relationship?.object_slug || '');
+    const allowed = attribute?.config?.record_reference?.allowed_object_ids || [];
+    return relationshipObject === target
+      || allowed.includes(target)
+      || titlePattern.test(String(attribute.title || ''));
+  })?.api_slug || '';
 }
 
 Deno.serve(async (req: Request) => {
@@ -158,14 +180,14 @@ Deno.serve(async (req: Request) => {
     auth: { persistSession: false },
   });
   const { data: userData, error: userError } = await userClient.auth.getUser();
-  const email = String(userData.user?.email || '').toLowerCase();
-  if (userError || !email.endsWith('@gsdecorating.com')) {
+  const userEmail = String(userData.user?.email || '').toLowerCase();
+  if (userError || !userEmail.endsWith('@gsdecorating.com')) {
     return json({ error: 'Authorised GSD account required' }, 403);
   }
 
   let leadId = '';
   try {
-    leadId = String(((await req.json()) as JsonRecord).lead_id || '');
+    leadId = String((await req.json()).lead_id || '');
   } catch {
     return json({ error: 'Invalid request body' }, 400);
   }
@@ -191,177 +213,98 @@ Deno.serve(async (req: Request) => {
     return json({ error: 'Lead must be approved before Attio sync' }, 409);
   }
 
-  const { data: projectLink } = await db
-    .from('attio_sync_links')
-    .select('attio_object_slug,attio_record_id,attio_web_url')
-    .eq('entity_type', 'project')
-    .eq('source_key', lead.project_id)
-    .eq('sync_status', 'synced')
-    .maybeSingle();
-  if (!projectLink?.attio_record_id) {
-    return json({ error: 'Sync this project to Attio before creating its deal' }, 409);
-  }
-
-  const [{ data: companyLink }, { data: personLink }, { data: dealLink }] = await Promise.all([
-    db.from('attio_sync_links')
-      .select('attio_record_id')
-      .eq('entity_type', 'company')
-      .eq('source_name', lead.company_name || '')
-      .eq('sync_status', 'synced')
-      .limit(1)
-      .maybeSingle(),
-    lead.recipient_email
-      ? db.from('attio_sync_links')
-        .select('attio_record_id')
-        .eq('entity_type', 'person')
-        .eq('source_key', `email:${String(lead.recipient_email).toLowerCase()}`)
-        .eq('sync_status', 'synced')
-        .maybeSingle()
-      : Promise.resolve({ data: null }),
-    db.from('attio_sync_links')
-      .select('attio_record_id')
-      .eq('entity_type', 'deal')
-      .eq('source_key', lead.id)
-      .maybeSingle(),
-  ]);
-
-  const project = Array.isArray(lead.ccs_projects) ? lead.ccs_projects[0] : lead.ccs_projects;
-  const attio = new AttioClient(attioToken);
   try {
-    const objects = await attio.listObjects();
-    const projectObject = objects.find(object => object.api_slug === projectLink.attio_object_slug);
-    if (!projectObject) throw new Error('The linked Attio Project object no longer exists');
+    const project = Array.isArray(lead.ccs_projects) ? lead.ccs_projects[0] : lead.ccs_projects;
+    const email = normaliseEmail(lead.recipient_email || project?.marker_email);
+    const personName = normaliseName(lead.recipient_name || project?.site_manager_name);
+    const companyName = normaliseName(lead.company_name || project?.main_contractor);
 
-    const ensured = await ensureDealAttributes(attio, await attio.listAttributes('deals'));
-    const warnings = [...ensured.warnings];
-    const ccsAttribute = findAttribute(ensured.attributes, ['ccs_site_id']);
-    if (!ccsAttribute?.is_writable) {
-      throw new Error('Attio Deals requires a writable CCS Site ID attribute for safe retry handling');
-    }
-    const projectReference = await ensureProjectReference(
-      attio,
-      ensured.attributes,
-      projectLink.attio_object_slug,
+    const companyResult = await findOrCreateCompany(attioToken, companyName, email);
+    const companyId = recordId(companyResult.record);
+    const personResult = await findOrCreatePerson(attioToken, personName, email, companyId);
+    const personId = recordId(personResult.record);
+
+    const attributes = await projectAttributes(attioToken);
+    const available = new Set(attributes.map((attribute: any) => attribute.api_slug));
+    const companyAttribute = relationshipSlug(
+      attributes,
+      'companies',
+      Deno.env.get('ATTIO_PROJECT_COMPANY_ATTRIBUTE'),
     );
-    if (projectReference.warning) warnings.push(projectReference.warning);
+    const peopleAttribute = relationshipSlug(
+      attributes,
+      'people',
+      Deno.env.get('ATTIO_PROJECT_PEOPLE_ATTRIBUTE'),
+    );
 
-    let dealRecordId = dealLink?.attio_record_id || null;
-    if (!dealRecordId) {
-      const number = lead.project_id.replace(/^site/, '');
-      const matchValue = ccsAttribute.type === 'number' ? Number(number) : number;
-      let matches = await attio.queryRecords(
-        'deals',
-        { [ccsAttribute.api_slug]: matchValue },
-        2,
-      );
-      if (!matches.length && ccsAttribute.type !== 'number') {
-        matches = await attio.queryRecords(
-          'deals',
-          { [ccsAttribute.api_slug]: lead.project_id },
-          2,
-        );
-      }
-      dealRecordId = matches[0]?.id.record_id || null;
-    }
-
-    const values: Record<string, unknown> = {};
-    put(values, ensured.attributes, ['name'], lead.project_name);
-    put(values, ensured.attributes, ['stage'], 'Lead');
-    put(values, ensured.attributes, ['ccs_site_id'], lead.project_id.replace(/^site/, ''));
-    put(values, ensured.attributes, ['sitefinder_url'], projectUrl(lead.project_id));
-    put(values, ensured.attributes, ['sitefinder_project_url'], projectLink.attio_web_url);
-    put(values, ensured.attributes, ['ccs_source_url'], sourceUrl(lead.project_id));
-    put(values, ensured.attributes, ['sitefinder_synced_at'], new Date().toISOString());
-    put(values, ensured.attributes, ['local_authority'], project?.local_authority);
-    put(values, ensured.attributes, ['project_address', 'address'], project?.address);
-    put(values, ensured.attributes, ['site_start_date', 'start_date'], project?.site_start_date);
-    put(values, ensured.attributes, ['site_end_date', 'end_date'], project?.site_end_date);
-    put(values, ensured.attributes, ['project_summary', 'description'], project?.summary);
-
-    const owner = findAttribute(ensured.attributes, ['owner']);
-    if (owner?.is_writable) {
-      values[owner.api_slug] = [{
+    const ccsNumber = String(lead.project_id).replace(/^site/, '');
+    const sourceUrl = `https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails/${ccsNumber}/null`;
+    const summary = project?.summary
+      || `${lead.project_name} is a CCS-registered construction project in ${project?.local_authority || 'the GSD target area'}.`;
+    const candidateValues = optionalValues({
+      name: lead.project_name,
+      owner: [{
         referenced_actor_type: 'workspace-member',
         referenced_actor_id: ownerId,
-      }];
-    }
-    putReference(
-      values,
-      ensured.attributes,
-      ['sitefinder_project', 'project', 'attio project'],
-      projectLink.attio_object_slug,
-      projectLink.attio_record_id,
-    );
-    putReference(
-      values,
-      ensured.attributes,
-      ['associated_company', 'company'],
-      'companies',
-      companyLink?.attio_record_id || null,
-    );
-    putReference(
-      values,
-      ensured.attributes,
-      ['associated_people', 'people'],
-      'people',
-      personLink?.attio_record_id || null,
+      }],
+      ccs_site_id: lead.project_id,
+      sitefinder_source_url: sourceUrl,
+      local_authority: project?.local_authority,
+      main_contractor: project?.main_contractor || lead.company_name,
+      client_name: project?.client,
+      project_address: project?.address,
+      site_contact_name: personName,
+      site_contact_email: email,
+      site_contact_phone: project?.site_manager_phone,
+      site_start_date: project?.site_start_date,
+      site_end_date: project?.site_end_date,
+      project_summary: summary,
+      sitefinder_synced_at: new Date().toISOString(),
+      [companyAttribute]: companyId ? [{
+        target_object: 'companies',
+        target_record_id: companyId,
+      }] : null,
+      [peopleAttribute]: personId ? [{
+        target_object: 'people',
+        target_record_id: personId,
+      }] : null,
+    });
+    const values = Object.fromEntries(
+      Object.entries(candidateValues).filter(([slug]) => available.has(slug)),
     );
 
-    let record;
-    try {
-      record = dealRecordId
-        ? await attio.updateRecord('deals', dealRecordId, optionalValues(values))
-        : await attio.createRecord('deals', optionalValues(values));
-    } catch (error) {
-      const stage = findAttribute(ensured.attributes, ['stage']);
-      if (!(error instanceof AttioError) || !stage || !(stage.api_slug in values)) throw error;
-      const withoutStage = { ...values };
-      delete withoutStage[stage.api_slug];
-      record = dealRecordId
-        ? await attio.updateRecord('deals', dealRecordId, optionalValues(withoutStage))
-        : await attio.createRecord('deals', optionalValues(withoutStage));
-    }
-
+    const attioBody = await attioFetch(
+      attioToken,
+      '/objects/projects/records?matching_attribute=ccs_site_id',
+      { method: 'PUT', body: JSON.stringify({ data: { values } }) },
+    );
+    const projectRecordId = recordId(attioBody?.data);
     const syncedAt = new Date().toISOString();
-    const { error: linkError } = await db.from('attio_sync_links').upsert({
-      entity_type: 'deal',
-      source_key: lead.id,
-      source_name: lead.project_name,
-      project_id: lead.project_id,
-      attio_object_slug: 'deals',
-      attio_record_id: record.id.record_id,
-      attio_web_url: record.web_url || null,
-      sitefinder_url: projectUrl(lead.project_id),
-      sync_status: 'synced',
-      sync_error: null,
-      last_attempted_at: syncedAt,
-      synced_at: syncedAt,
-      updated_at: syncedAt,
-    }, { onConflict: 'entity_type,source_key' });
-    if (linkError) throw linkError;
-
-    const { error: updateError } = await db.from('outreach_leads').update({
-      attio_record_id: record.id.record_id,
-      attio_web_url: record.web_url || null,
-      attio_project_record_id: projectLink.attio_record_id,
-      attio_project_url: projectLink.attio_web_url || null,
+    await db.from('outreach_leads').update({
+      attio_record_id: projectRecordId,
+      attio_company_record_id: companyId || null,
+      attio_person_record_id: personId || null,
       attio_synced_at: syncedAt,
       attio_sync_error: null,
       updated_at: syncedAt,
     }).eq('id', lead.id);
-    if (updateError) throw updateError;
 
     return json({
       ok: true,
       lead_id: lead.id,
-      attio_record_id: record.id.record_id,
+      attio_record_id: projectRecordId,
+      attio_company_record_id: companyId || null,
+      attio_person_record_id: personId || null,
+      company_created: companyResult.created,
+      person_created: personResult.created,
+      company_matched_by: companyResult.matched_by,
+      person_matched_by: personResult.matched_by,
       attio_synced_at: syncedAt,
-      web_url: record.web_url || null,
-      project_web_url: projectLink.attio_web_url || null,
-      warnings,
+      web_url: attioBody?.data?.web_url || null,
+      source: SITEFINDER_URL,
     });
   } catch (error) {
-    const message = errorMessage(error);
+    const message = String(error instanceof Error ? error.message : error).slice(0, 1000);
     await db.from('outreach_leads').update({
       attio_sync_error: message,
       updated_at: new Date().toISOString(),

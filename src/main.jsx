@@ -89,20 +89,29 @@ const navItems = [
   {id:'contractors',label:'Contractors',icon:Users},
 ];
 
+const demoOutreachLeads = [
+  {id:'demo-bowmer',project_id:'site520001',project_name:'Office & warehouse, Birmingham',recipient_email:'procurement@bandk.co.uk',recipient_name:'Jemima Rowe',company_name:'Bowmer + Kirkland',status:'queued',email_subject:'Painting and spray support for your Birmingham project',email_body:'Hi Jemima,\\n\\nI came across Bowmer + Kirkland’s new office and warehouse project in Birmingham and wanted to introduce GSD Decorating.\\n\\nWe support main contractors with high-quality painting, decorating and specialist spray finishes. We would welcome the opportunity to price the relevant packages for this project.\\n\\nWould it be useful if I sent over a short capability summary and examples of similar work?\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',attio_record_id:'demo-attio-1',attio_synced_at:'2026-07-29T10:28:00Z',created_at:'2026-07-29T09:14:00Z',updated_at:'2026-07-29T10:29:00Z'},
+  {id:'demo-overbury',project_id:'site517241',project_name:'HQ fit-out, London',recipient_email:'david.walsh@overbury.com',recipient_name:'David Walsh',company_name:'Overbury plc',status:'queued',email_subject:'Decorating support for your London fit-out',email_body:'Hi David,\\n\\nI noticed the new London fit-out and wanted to introduce GSD Decorating.\\n\\nWe support fit-out contractors with commercial decorating and spray finishes across London and the South East.\\n\\nWould you be the right person to speak with about the package?\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',created_at:'2026-07-29T08:41:00Z',updated_at:'2026-07-29T09:41:00Z'},
+  {id:'demo-parkeray',project_id:'site520220',project_name:'Retail scheme, Barking',recipient_email:'ian.ambrose@parkeray.co.uk',recipient_name:'Ian Ambrose',company_name:'Parkeray Ltd',status:'approved',email_subject:'Painting support for your Barking retail scheme',email_body:'Hi Ian,\\n\\nI came across the Barking retail scheme and wanted to introduce GSD Decorating.\\n\\nWe would welcome the opportunity to price the painting and decorating packages.\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',created_at:'2026-07-28T14:18:00Z',updated_at:'2026-07-29T09:18:00Z'},
+  {id:'demo-mackley',project_id:'site520831',project_name:'Industrial extension, Leicester',recipient_email:'glen.oaten@mackley.co.uk',recipient_name:'Glen Oaten',company_name:'J T Mackley & Co Ltd',status:'sent',email_subject:'Decorating support for your Leicester project',email_body:'Hi Glen,\\n\\nI wanted to introduce GSD Decorating in relation to your Leicester industrial extension.\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',created_at:'2026-07-27T08:32:00Z',updated_at:'2026-07-29T08:32:00Z'},
+  {id:'demo-bam',project_id:'site520900',project_name:'Education project, Kent',recipient_email:'commercial@bam.com',recipient_name:'Commercial Team',company_name:'BAM Construction',status:'followup_due',email_subject:'Follow-up: Kent education project',email_body:'Hi,\\n\\nI wanted to follow up on my note about the Kent education project.\\n\\nKind regards,\\nSam Ward\\nGSD Decorating',created_at:'2026-07-20T08:32:00Z',updated_at:'2026-07-24T08:32:00Z'},
+];
+
 function SelectFilter({label,value,onChange,options,allLabel}) {
   return <label className="filter"><span>{label}</span><select value={value} onChange={e=>onChange(e.target.value)}><option value="">{allLabel}</option>{options.map(option=><option key={option} value={option}>{option}</option>)}</select></label>;
 }
 
 function App({session,cloudEnabled}){
   const [projects,setProjects]=useState([]), [query,setQuery]=useState(''), [selected,setSelected]=useState(null), [detail,setDetail]=useState(null);
-  const [loading,setLoading]=useState(true), [error,setError]=useState(''), [activeView,setActiveView]=useState('projects'), [page,setPage]=useState(1);
+  const [loading,setLoading]=useState(true), [error,setError]=useState(''), [activeView,setActiveView]=useState(()=>new URLSearchParams(window.location.search).get('view')||'projects'), [page,setPage]=useState(1);
   const [mapFitRequest,setMapFitRequest]=useState(0);
   const [mobileMoreOpen,setMobileMoreOpen]=useState(false);
   const [saved,setSaved]=useState(()=>new Set(JSON.parse(localStorage.getItem('gsd-saved')||'[]'))), [notes,setNotes]=useState(()=>JSON.parse(localStorage.getItem('gsd-notes')||'{}'));
   const [history,setHistory]=useState({}), [syncStatus,setSyncStatus]=useState(null), [tracking,setTracking]=useState({});
   const [attioLinks,setAttioLinks]=useState({}), [enrichment,setEnrichment]=useState({});
   const [tasks,setTasks]=useState([]);
-  const [outreachLeads,setOutreachLeads]=useState([]), [communications,setCommunications]=useState([]), [suppressions,setSuppressions]=useState([]);
+  const [outreachLeads,setOutreachLeads]=useState(()=>cloudEnabled?[]:demoOutreachLeads), [communications,setCommunications]=useState([]), [suppressions,setSuppressions]=useState([]);
+  const [mailboxes,setMailboxes]=useState(()=>cloudEnabled?[]:[{mailbox_email:'sales@gsdecorating.com',display_name:'GSD Sales',is_active:true}]), [mailboxesLoading,setMailboxesLoading]=useState(cloudEnabled);
   const [draftFilters,setDraftFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true}), [filters,setFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true});
   const draftFiltersRef=useRef(draftFilters);
 
@@ -122,6 +131,20 @@ function App({session,cloudEnabled}){
     fetchAllRows('ccs_project_enrichment','*')
   ]).then(([s,n,h,sync,t,taskRows,outreachRows,communicationRows,suppressionRows,attioRows,enrichmentRows])=>{if(s.data)setSaved(new Set(s.data.map(x=>x.project_id)));if(n.data)setNotes(Object.fromEntries(n.data.map(x=>[x.project_id,x.note])));if(h.data)setHistory(Object.fromEntries(h.data.map(x=>[x.project_id,x])));if(sync.data)setSyncStatus(sync.data);if(t.data)setTracking(Object.fromEntries(t.data.map(x=>[x.project_id,x])));if(taskRows.data)setTasks(taskRows.data);if(outreachRows.data)setOutreachLeads(outreachRows.data);if(communicationRows.data)setCommunications(communicationRows.data);if(suppressionRows.data)setSuppressions(suppressionRows.data);if(attioRows.data)setAttioLinks(Object.fromEntries(attioRows.data.filter(x=>x.project_id).map(x=>[x.project_id,x])));if(enrichmentRows.data)setEnrichment(Object.fromEntries(enrichmentRows.data.map(x=>[x.project_id,x])))}) },[cloudEnabled]);
   useEffect(()=>setPage(1),[query,filters,activeView]);
+  const loadMailboxes=useCallback(async()=>{
+    if(!cloudEnabled){setMailboxesLoading(false);return}
+    setMailboxesLoading(true);
+    const {data,error:mailboxError}=await supabase.functions.invoke('gmail-mailboxes',{body:{action:'list'}});
+    if(mailboxError||data?.error)setError(`Could not load sending mailboxes: ${data?.error||mailboxError?.message}`);
+    else setMailboxes(data?.mailboxes||[]);
+    setMailboxesLoading(false);
+  },[cloudEnabled]);
+  useEffect(()=>{loadMailboxes()},[loadMailboxes]);
+  const connectMailbox=async()=>{
+    const {data,error:mailboxError}=await supabase.functions.invoke('gmail-mailboxes',{body:{action:'begin'}});
+    if(mailboxError||data?.error||!data?.auth_url){setError(`Could not start Gmail connection: ${data?.error||mailboxError?.message||'No connection URL returned'}`);return}
+    window.location.assign(data.auth_url);
+  };
 
   const options=useMemo(()=>({locations:unique(projects,'LaId'),contractors:unique(projects,'MainContractor'),clients:unique(projects,'Client')}),[projects]);
   const filtered=useMemo(()=>projects.filter(p=>{
@@ -186,11 +209,27 @@ function App({session,cloudEnabled}){
     if(cloudEnabled){const {data,error:outreachError}=await supabase.from('outreach_leads').update({...updates,updated_by:session.user.id}).eq('id',lead.id).select().single();if(outreachError){setOutreachLeads(current=>current.map(item=>item.id===lead.id?previous:item));setError(`Could not update outreach: ${outreachError.message}`);return false}setOutreachLeads(current=>current.map(item=>item.id===lead.id?data:item));if(changes.status==='approved')await syncOutreachToAttio(data)}
     return true
   };
+  const approveAndSendOutreach=async(lead,changes)=>{
+    const approved=await updateOutreach(lead,changes);
+    if(!approved)return {ok:false,sent:false,error:'The draft could not be approved.'};
+    if(!cloudEnabled)return {ok:true,sent:false};
+    const {data,error:sendError}=await supabase.functions.invoke('send-approved-outreach',{body:{lead_id:lead.id,mode:'initial'}});
+    if(sendError||data?.error){
+      const message=data?.error||sendError?.message||'GSD mailbox connection is not ready';
+      setError(`Draft approved, but no email was sent: ${message}`);
+      return {ok:false,sent:false,error:`Draft approved, but no email was sent: ${message}`};
+    }
+    const sentAt=new Date().toISOString();
+    setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,status:'sent',sent_at:sentAt,gmail_message_id:data.gmail_message_id,gmail_thread_id:data.gmail_thread_id,next_follow_up_at:data.next_follow_up_at,follow_up_step:data.follow_up_step,updated_at:sentAt}:item));
+    const {data:historyRows}=await supabase.from('outreach_communications').select('*').eq('project_id',lead.project_id).order('occurred_at',{ascending:false});
+    if(historyRows)setCommunications(current=>[...current.filter(item=>item.project_id!==lead.project_id),...historyRows]);
+    return {ok:true,sent:true};
+  };
   const syncOutreachToAttio=async lead=>{
     if(!cloudEnabled)return false;
     const {data,error:syncError}=await supabase.functions.invoke('sync-approved-leads-to-attio',{body:{lead_id:lead.id}});
     if(syncError||data?.error){const message=data?.error||syncError?.message||'Attio sync failed';setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,attio_sync_error:message}:item));setError(`Lead approved, but Attio could not be updated: ${message}`);return false}
-    setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,attio_record_id:data.attio_record_id,attio_web_url:data.web_url,attio_project_url:data.project_web_url,attio_synced_at:data.attio_synced_at,attio_sync_error:null}:item));
+    setOutreachLeads(current=>current.map(item=>item.id===lead.id?{...item,attio_record_id:data.attio_record_id,attio_company_record_id:data.attio_company_record_id||null,attio_person_record_id:data.attio_person_record_id||null,attio_synced_at:data.attio_synced_at,attio_sync_error:null}:item));
     return true
   };
   const logCommunication=async(p,channel)=>{
@@ -232,7 +271,7 @@ function App({session,cloudEnabled}){
       </>}
       {activeView==='insights'&&<Insights projects={projects} saved={saved} contractorStats={contractorStats}/>}
       {activeView==='tasks'&&<TaskDashboard tasks={tasks} projects={projects} openProject={open} toggleTask={toggleTask} deleteTask={deleteTask}/>}
-      {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} updateLead={updateOutreach} syncToAttio={syncOutreachToAttio}/>}
+      {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} mailboxes={mailboxes} mailboxesLoading={mailboxesLoading} connectMailbox={connectMailbox} updateLead={updateOutreach} approveAndSend={approveAndSendOutreach}/>}
       {activeView==='research'&&<ResearchAgentPage cloudEnabled={cloudEnabled} session={session}/>}
       {activeView==='contractors'&&<Contractors stats={contractorStats} onSelect={name=>{updateDraftFilter('contractor',name);setFilters(x=>({...x,contractor:name}));goToView('projects')}}/>}
     </main>
