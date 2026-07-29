@@ -139,7 +139,7 @@ function App({session,cloudEnabled}){
     else setMailboxes(data?.mailboxes||[]);
     setMailboxesLoading(false);
   },[cloudEnabled]);
-  useEffect(()=>{loadMailboxes()},[loadMailboxes]);
+  useEffect(()=>{if(activeView==='outreach')loadMailboxes()},[activeView,loadMailboxes]);
   const connectMailbox=async()=>{
     const {data,error:mailboxError}=await supabase.functions.invoke('gmail-mailboxes',{body:{action:'begin'}});
     if(mailboxError||data?.error||!data?.auth_url){setError(`Could not start Gmail connection: ${data?.error||mailboxError?.message||'No connection URL returned'}`);return}
