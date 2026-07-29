@@ -136,7 +136,9 @@ function App({session,cloudEnabled}){
     setMailboxesLoading(true);
     setMailboxError('');
     const {data,error:mailboxError}=await supabase.functions.invoke('gmail-mailboxes',{body:{action:'list'}});
-    if(mailboxError||data?.error)setMailboxError(`Could not load sending mailboxes: ${data?.error||mailboxError?.message}`);
+    let mailboxMessage=data?.error||mailboxError?.message;
+    if(mailboxError?.context){const responseBody=await mailboxError.context.clone().json().catch(()=>null);mailboxMessage=responseBody?.error||mailboxMessage}
+    if(mailboxError||data?.error)setMailboxError(`Could not load sending mailboxes: ${mailboxMessage}`);
     else setMailboxes(data?.mailboxes||[]);
     setMailboxesLoading(false);
   },[cloudEnabled]);
@@ -145,7 +147,9 @@ function App({session,cloudEnabled}){
     if(!cloudEnabled){window.location.assign('https://gsd-sitefinder.onrender.com/?view=outreach');return}
     setMailboxError('');
     const {data,error:mailboxError}=await supabase.functions.invoke('gmail-mailboxes',{body:{action:'begin'}});
-    if(mailboxError||data?.error||!data?.auth_url){setMailboxError(`Could not start Gmail connection: ${data?.error||mailboxError?.message||'No connection URL returned'}`);return}
+    let mailboxMessage=data?.error||mailboxError?.message;
+    if(mailboxError?.context){const responseBody=await mailboxError.context.clone().json().catch(()=>null);mailboxMessage=responseBody?.error||mailboxMessage}
+    if(mailboxError||data?.error||!data?.auth_url){setMailboxError(`Could not start Gmail connection: ${mailboxMessage||'No connection URL returned'}`);return}
     window.location.assign(data.auth_url);
   };
 
