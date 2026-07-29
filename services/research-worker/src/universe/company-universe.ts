@@ -1,5 +1,6 @@
 import {
   canonicalDomain,
+  isBusinessEmail,
   normalizeCompanyName,
   stableId,
 } from "../lib/normalize.js";
@@ -181,7 +182,10 @@ function companyLegalForm(value: string): string | null {
 
 function normalizedDomain(value: string | null | undefined): string | null {
   const candidate = textOrNull(value);
-  return candidate ? canonicalDomain(candidate) : null;
+  const domain = candidate ? canonicalDomain(candidate) : null;
+  return domain && isBusinessEmail(`company-domain-check@${domain}`)
+    ? domain
+    : null;
 }
 
 function normalizeDomains(row: CompanyUniverseInputRow): {
