@@ -10,6 +10,13 @@ const researchApprovalMigration = await readFile(
   ),
   'utf8',
 );
+const licensedEmailStatusMigration = await readFile(
+  new URL(
+    './supabase/migrations/20260730103000_add_licensed_research_email_status.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
 
 function verifyJwtFor(functionName) {
   const escaped = functionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -61,5 +68,16 @@ test('database approval requires a public exact-email comparison and evidence fl
   assert.match(
     researchApprovalMigration,
     /create trigger recheck_research_candidate_approval/u,
+  );
+});
+
+test('database accepts a licensed email status without making it approvable', () => {
+  assert.match(
+    licensedEmailStatusMigration,
+    /'licensed_business_email_found'/u,
+  );
+  assert.doesNotMatch(
+    researchApprovalMigration,
+    /email_status = 'licensed_business_email_found'/u,
   );
 });

@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { CompanySeed, CrmCompanySnapshot } from "../types.js";
-import { canonicalDomain, stableId } from "../lib/normalize.js";
+import {
+  canonicalDomain,
+  normalizeHostname,
+  stableId,
+} from "../lib/normalize.js";
 import {
   openPrivateOutputFile,
   preparePrivateOutputDirectory,
@@ -15,6 +19,7 @@ const companySeedSchema = z.object({
   name: z.string().min(1),
   domain: z.string().min(1),
   websiteUrl: z.url().optional(),
+  apolloSearchDomain: z.string().trim().min(1).max(253).optional(),
   source: z.enum(["attio", "pipedrive", "file"]).default("file"),
   sourceRecordId: z.string().optional(),
   sourceIds: z
@@ -66,6 +71,14 @@ export async function loadCompanySeeds(path: string): Promise<CompanySeed[]> {
         `Website domain does not match company domain at input row ${index + 1}`,
       );
     }
+    const apolloSearchDomain = parsed.apolloSearchDomain
+      ? normalizeHostname(parsed.apolloSearchDomain)
+      : undefined;
+    if (parsed.apolloSearchDomain && !apolloSearchDomain) {
+      throw new Error(
+        `Invalid Apollo search domain at input row ${index + 1}`,
+      );
+    }
     const sourceIds = parsed.sourceIds
       ? {
           ...(parsed.sourceIds.attio
@@ -91,6 +104,7 @@ export async function loadCompanySeeds(path: string): Promise<CompanySeed[]> {
       name: parsed.name.trim(),
       domain,
       websiteUrl,
+      ...(apolloSearchDomain ? { apolloSearchDomain } : {}),
       source: parsed.source,
       ...(parsed.sourceRecordId
         ? { sourceRecordId: parsed.sourceRecordId }

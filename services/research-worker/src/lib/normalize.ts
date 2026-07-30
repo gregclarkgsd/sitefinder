@@ -76,6 +76,31 @@ export function canonicalDomain(value: string): string | null {
   return (registrable ?? hostname).toLowerCase().replace(/^www\./u, "");
 }
 
+export function normalizeHostname(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(
+      /^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed)
+        ? trimmed
+        : `https://${trimmed}`,
+    );
+    if (
+      url.username ||
+      url.password ||
+      url.port ||
+      (url.pathname !== "" && url.pathname !== "/") ||
+      url.search ||
+      url.hash
+    ) {
+      return null;
+    }
+    return url.hostname.toLowerCase().replace(/^www\./u, "");
+  } catch {
+    return null;
+  }
+}
+
 export function normalizeCompanyName(value: string): string {
   return collapseWhitespace(
     value

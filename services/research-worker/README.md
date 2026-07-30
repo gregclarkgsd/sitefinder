@@ -223,6 +223,32 @@ To include Companies House, set `COMPANIES_HOUSE_API_KEY` and add:
 --with-companies-house
 ```
 
+To add a bounded Apollo people search, supply `APOLLO_API_KEY` through the
+local process environment or a local secret manager (not this iCloud-backed
+workspace) and add:
+
+```bash
+--with-apollo --apollo-max-people 10
+```
+
+Apollo is opt-in because person enrichment can consume Apollo credits. The
+worker searches the exact company domain for target construction roles, asks
+only for verified business emails, and explicitly disables personal-email,
+phone, and waterfall enrichment. Results are labelled
+`licensed_business_email_found`; they can be reviewed and compared with the
+CRM snapshots but cannot be approved until the email is independently verified
+on a public source.
+
+If Apollo indexes a business under a different current official hostname, add
+an `apolloSearchDomain` to that reviewed company input row. The exact hostname
+is used for search, while an enrichment result is accepted only when Apollo's
+organisation domain has the same registrable parent. For example, BAM's
+reviewed input can retain `domain: "bam.co.uk"` and specify
+`apolloSearchDomain: "ukandireland.bam.com"`; Apollo may then return the
+verified parent organisation and email domain `bam.com`. Because the reviewed
+pilot manifest is bound to the exact company-input hash, this alias is an
+explicit reviewed input rather than an automatic fuzzy match.
+
 To inspect recent public procurement notices, add a bounded window:
 
 ```bash
@@ -256,6 +282,38 @@ evidence sentences, or personal email or telephone values.
 This updates only the SiteFinder run viewer. It does not create or update
 Attio or Pipedrive records, and discovered candidates still require a person
 to approve or reject them.
+
+### Run one reviewed SiteFinder queue request
+
+Set `RESEARCH_AGENT_INGEST_URL`, `RESEARCH_AGENT_INGEST_TOKEN`, and
+`RESEARCH_QUEUE_INPUT_MANIFEST` in the local worker environment. The queue
+manifest itself must be private and may use relative paths beneath
+`RESEARCH_PRIVATE_DATA_DIRECTORY`:
+
+```json
+{
+  "schemaVersion": 1,
+  "cleanupDecisions": "cleanup/decisions.jsonl",
+  "cleanupManifest": "cleanup/approval-manifest.json",
+  "attioPeople": "snapshots/attio-post-cleanup/people.json",
+  "attioSnapshotManifest": "snapshots/attio-post-cleanup/completion-manifest.json",
+  "pipedrivePeople": "snapshots/pipedrive/people.json",
+  "pipedriveSnapshotManifest": "snapshots/pipedrive/completion-manifest.json"
+}
+```
+
+Then run:
+
+```bash
+npm run queue:run
+```
+
+The command fully verifies those cleanup and CRM inputs before asking
+SiteFinder for work. It atomically claims at most one oldest queued request,
+uses the company IDs and sources reviewed in SiteFinder, saves the private
+evidence pack under `queue-runs/<run-id>`, and exits. Apollo is contacted only
+when that reviewed request includes Apollo, so an empty queue and failed
+preflight consume no Apollo credits.
 
 Every retained discovery is compared by exact normalized business email with
 the two verified CRM snapshots. Results are one of: already in Attio,

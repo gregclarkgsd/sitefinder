@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { z } from "zod";
 import {
   assertPublicHttpUrl,
   type DnsLookup,
@@ -22,6 +23,8 @@ interface PublisherOptions {
   lookup?: DnsLookup;
   timeoutMs?: number;
   controlPollMs?: number;
+  runId?: string;
+  initialSequence?: number;
 }
 
 interface StartOptions {
@@ -49,6 +52,113 @@ const runControlStatuses = new Set<RunControlStatus>([
   "failed",
   "cancelled",
 ]);
+
+const queueClaimSchema = z
+  .object({
+    claimed: z.literal(true),
+    run: z
+      .object({
+        id: z.uuid(),
+        name: z.string().trim().min(1).max(120),
+        requestedSources: z
+          .array(
+            z.enum([
+              "website",
+              "apollo",
+              "companiesHouse",
+              "procurement",
+            ]),
+          )
+          .min(1)
+          .max(4),
+        apolloMaxPeople: z.number().int().min(1).max(25),
+        procurementDays: z.number().int().min(0).max(365),
+        companies: z
+          .array(
+            z
+              .object({
+                companyId: z.string().trim().min(1).max(240),
+                companyName: z.string().trim().min(1).max(240),
+                domain: z
+                  .string()
+                  .min(3)
+                  .max(253)
+                  .regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u),
+                apolloSearchDomain: z
+                  .string()
+                  .min(3)
+                  .max(253)
+                  .regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u)
+                  .optional(),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(25),
+      })
+      .strict(),
+  })
+  .strict();
+
+const emptyQueueSchema = z.object({
+  claimed: z.literal(false),
+}).strict();
+
+export type ClaimedResearchRun = z.infer<typeof queueClaimSchema>["run"];
+
+export class SiteFinderQueueClient {
+  private readonly endpoint: string;
+  private readonly token: string;
+  private readonly fetchImpl: typeof fetch;
+  private readonly lookup: DnsLookup | undefined;
+  private readonly timeoutMs: number;
+
+  constructor(options: PublisherOptions) {
+    this.endpoint = assertEndpointIsSafe(options.endpoint);
+    this.token = options.token;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.lookup = options.lookup;
+    this.timeoutMs = options.timeoutMs ?? 12_000;
+  }
+
+  private async assertEndpointHostIsPublic(): Promise<void> {
+    const url = new URL(this.endpoint);
+    const localPreview =
+      url.protocol === "http:" &&
+      (url.hostname === "127.0.0.1" || url.hostname === "localhost");
+    if (localPreview) return;
+    if (this.lookup) {
+      await assertPublicHttpUrl(url, this.lookup);
+      return;
+    }
+    await assertPublicHttpUrl(url);
+  }
+
+  async claim(workerId: string): Promise<ClaimedResearchRun | undefined> {
+    const claimUrl = new URL("/api/research/worker/claim", this.endpoint);
+    await this.assertEndpointHostIsPublic();
+    const response = await this.fetchImpl(claimUrl, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${this.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ workerId }),
+      redirect: "error",
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Research queue endpoint returned HTTP ${response.status}`,
+      );
+    }
+    const body = await response.json();
+    const empty = emptyQueueSchema.safeParse(body);
+    if (empty.success) return undefined;
+    return queueClaimSchema.parse(body).run;
+  }
+}
 
 function stableUuid(...values: string[]): string {
   const bytes = createHash("sha256")
@@ -120,7 +230,7 @@ function candidateEvidence(
 }
 
 export class SiteFinderProgressPublisher {
-  readonly runId = randomUUID();
+  readonly runId: string;
   private readonly endpoint: string;
   private readonly token: string;
   private readonly fetchImpl: typeof fetch;
@@ -128,7 +238,7 @@ export class SiteFinderProgressPublisher {
   private readonly timeoutMs: number;
   private readonly controlPollMs: number;
   private readonly taskIds = new Map<string, string>();
-  private sequence = 0;
+  private sequence: number;
   private companiesChecked = 0;
   private pagesInspected = 0;
   private peopleFound = 0;
@@ -136,6 +246,14 @@ export class SiteFinderProgressPublisher {
   private lastControlStatus: RunControlStatus = "running";
 
   constructor(options: PublisherOptions) {
+    this.runId = options.runId ?? randomUUID();
+    this.sequence = options.initialSequence ?? 0;
+    if (!z.uuid().safeParse(this.runId).success) {
+      throw new Error("Research progress run ID must be a UUID");
+    }
+    if (!Number.isInteger(this.sequence) || this.sequence < 0) {
+      throw new Error("Research progress sequence must be non-negative");
+    }
     this.endpoint = assertEndpointIsSafe(options.endpoint);
     this.token = options.token;
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -325,7 +443,10 @@ export class SiteFinderProgressPublisher {
     }
     await this.appendEvent({
       eventType: "run",
-      message: `Queued ${options.companies.length} companies for read-only research.`,
+      message:
+        this.sequence > 0
+          ? `Approved local worker started ${options.companies.length} queued companies.`
+          : `Queued ${options.companies.length} companies for read-only research.`,
     });
   }
 
@@ -450,7 +571,14 @@ export class SiteFinderProgressPublisher {
     );
     for (const contact of result.contacts) {
       const evidence = candidateEvidence(result, contact);
+      const licensedProfileUrl =
+        evidence?.sourceKind === "apollo"
+          ? contact.profileUrls
+              .map((value) => httpsSource(value))
+              .find((value) => value !== undefined)
+          : undefined;
       const sourceUrl =
+        licensedProfileUrl ??
         httpsSource(evidence?.sourceUrl) ??
         httpsSource(result.company.websiteUrl);
       if (!sourceUrl) {
@@ -474,6 +602,12 @@ export class SiteFinderProgressPublisher {
           roleCategory: contact.roleCategory,
           sourceKind: evidence?.sourceKind ?? "company_website",
           sourceUrl,
+          ...(evidence?.sourceKind === "apollo"
+            ? {
+                evidenceExcerpt:
+                  "Apollo licensed-provider result. Open the linked profile for independent public verification.",
+              }
+            : {}),
           crmComparison:
             comparisonByCandidate.get(contact.id) ??
             "conflicting_multiple_matches",
@@ -481,7 +615,11 @@ export class SiteFinderProgressPublisher {
             (point) => point.status === "public",
           )
             ? "public_email_found"
-            : "not_publicly_found",
+            : contact.emails.some(
+                  (point) => point.status === "licensed_provider",
+                )
+              ? "licensed_business_email_found"
+              : "not_publicly_found",
           confidence: contact.confidence,
         },
       });

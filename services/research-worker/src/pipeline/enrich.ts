@@ -1,6 +1,8 @@
 import type {
   AttioPersonSnapshot,
   CompanySeed,
+  ContactCandidate,
+  ContactPoint,
   EnrichedCompany,
   Evidence,
   PipedrivePersonSnapshot,
@@ -26,6 +28,7 @@ import {
 } from "../policy/apply-cleanup-policy.js";
 import type { CleanupDecision } from "../policy/cleanup-policy.js";
 import { CompaniesHouseReader } from "../public-data/companies-house.js";
+import { ApolloPeopleReader } from "../public-data/apollo.js";
 import {
   fetchContractsFinderReleases,
   fetchFindATenderReleases,
@@ -36,6 +39,7 @@ export interface EnrichmentOptions {
   crawl: CrawlOptions;
   concurrency: number;
   companiesHouse?: CompaniesHouseReader;
+  apollo?: ApolloPeopleReader;
   cleanupDecisions: CleanupDecision[];
   attioPeople: AttioPersonSnapshot[];
   pipedrivePeople: PipedrivePersonSnapshot[];
@@ -148,6 +152,63 @@ function attachProcurement(
   for (const item of evidence) byCompany.get(item.companyId)?.evidence.push(item);
 }
 
+const contactPointPriority: Record<ContactPoint["status"], number> = {
+  public: 5,
+  licensed_provider: 4,
+  existing: 3,
+  inferred: 2,
+  unknown: 1,
+};
+
+function mergeContactPoints(
+  existing: ContactPoint[],
+  incoming: ContactPoint[],
+): ContactPoint[] {
+  const byValue = new Map<string, ContactPoint>();
+  for (const point of [...existing, ...incoming]) {
+    const key = point.value.trim().toLowerCase();
+    if (!key) continue;
+    const current = byValue.get(key);
+    if (
+      !current ||
+      contactPointPriority[point.status] >
+        contactPointPriority[current.status]
+    ) {
+      byValue.set(key, point);
+    }
+  }
+  return [...byValue.values()];
+}
+
+function mergeApolloContacts(
+  existing: ContactCandidate[],
+  incoming: ContactCandidate[],
+): ContactCandidate[] {
+  const merged = [...existing];
+  for (const contact of incoming) {
+    const index = merged.findIndex(
+      (candidate) =>
+        candidate.normalizedName === contact.normalizedName &&
+        candidate.roleCategory === contact.roleCategory,
+    );
+    if (index < 0) {
+      merged.push(contact);
+      continue;
+    }
+    const current = merged[index]!;
+    merged[index] = {
+      ...current,
+      emails: mergeContactPoints(current.emails, contact.emails),
+      phones: mergeContactPoints(current.phones, contact.phones),
+      profileUrls: [...new Set([...current.profileUrls, ...contact.profileUrls])],
+      evidenceIds: [...new Set([...current.evidenceIds, ...contact.evidenceIds])],
+      confidence: Math.max(current.confidence, contact.confidence),
+      rolePriority: Math.max(current.rolePriority, contact.rolePriority),
+    };
+  }
+  return merged;
+}
+
 export async function enrichCompanies(
   companies: CompanySeed[],
   options: EnrichmentOptions,
@@ -226,6 +287,21 @@ export async function enrichCompanies(
         } catch (error) {
           result.warnings.push(
             `Companies House lookup failed: ${error instanceof Error ? error.message : "unknown error"}`,
+          );
+        }
+      }
+      if (options.apollo) {
+        try {
+          const licensedPeople = await options.apollo.enrich(company);
+          result.contacts = mergeApolloContacts(
+            result.contacts,
+            licensedPeople.contacts,
+          );
+          result.evidence.push(...licensedPeople.evidence);
+          result.warnings.push(...licensedPeople.warnings);
+        } catch (error) {
+          result.warnings.push(
+            `Apollo lookup failed: ${error instanceof Error ? error.message : "unknown error"}`,
           );
         }
       }

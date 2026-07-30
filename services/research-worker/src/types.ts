@@ -3,6 +3,7 @@ export type SourceKind =
   | "pipedrive"
   | "company_website"
   | "company_pdf"
+  | "apollo"
   | "companies_house"
   | "contracts_finder"
   | "find_a_tender";
@@ -23,6 +24,12 @@ export interface CompanySeed {
   name: string;
   domain: string;
   websiteUrl: string;
+  /**
+   * Optional reviewed hostname used only for Apollo people search. This is
+   * retained exactly (including a meaningful subdomain) while `domain` remains
+   * the canonical company identity domain.
+   */
+  apolloSearchDomain?: string;
   source: "attio" | "pipedrive" | "file";
   sourceRecordId?: string;
   sourceIds?: {
@@ -69,7 +76,12 @@ export interface Evidence {
 
 export interface ContactPoint {
   value: string;
-  status: "public" | "inferred" | "existing" | "unknown";
+  status:
+    | "public"
+    | "licensed_provider"
+    | "inferred"
+    | "existing"
+    | "unknown";
 }
 
 export interface ContactCandidate {

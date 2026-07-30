@@ -249,10 +249,10 @@ test('all machine-authored detail rows have null human attribution', async () =>
       name: 'Example Person',
       jobTitle: 'Commercial Manager',
       roleCategory: 'commercial',
-      sourceKind: 'company_website',
-      sourceUrl: 'https://example.com/team',
+      sourceKind: 'apollo',
+      sourceUrl: 'https://www.linkedin.com/in/example-person',
       crmComparison: 'missing_from_both',
-      emailStatus: 'public_email_found',
+      emailStatus: 'licensed_business_email_found',
       confidence: 0.9,
     },
   });

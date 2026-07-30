@@ -16,7 +16,12 @@ test("company selection parses the same bytes whose digest is recorded", async (
   await writeFile(
     path,
     JSON.stringify([
-      { id: "first", name: "First Ltd", domain: "first.example" },
+      {
+        id: "first",
+        name: "First Ltd",
+        domain: "first.example",
+        apolloSearchDomain: "people.first.example",
+      },
     ]),
   );
   const captured = await captureImmutableInput(path);
@@ -29,6 +34,7 @@ test("company selection parses the same bytes whose digest is recorded", async (
 
   const seeds = parseCapturedCompanySeeds(captured);
   assert.equal(seeds[0]?.name, "First Ltd");
+  assert.equal(seeds[0]?.apolloSearchDomain, "people.first.example");
   assert.equal(captured.byteLength, Buffer.byteLength(captured.text));
 });
 

@@ -6,6 +6,7 @@ import {
   createPreviewResearchRun,
   pendingReviewCount,
   primaryRunControl,
+  researchCandidateApprovalBlockReason,
   researchCrmComparisonLabel,
   requestStopAfterCurrent,
   reviewCandidate,
@@ -34,6 +35,17 @@ test('approval fails closed on unknown CRM states, missing public email or weak 
   assert.equal(canApproveResearchCandidate(candidate), true);
   assert.equal(canApproveResearchCandidate({...candidate, crmComparison: 'not_checked'}), false);
   assert.equal(canApproveResearchCandidate({...candidate, emailStatus: 'not_publicly_found'}), false);
+  assert.equal(
+    canApproveResearchCandidate({...candidate, emailStatus: 'licensed_business_email_found'}),
+    false,
+  );
+  assert.match(
+    researchCandidateApprovalBlockReason({
+      ...candidate,
+      emailStatus: 'licensed_business_email_found',
+    }),
+    /independent public verification/u,
+  );
   assert.equal(canApproveResearchCandidate({...candidate, confidence: 0.649}), false);
   assert.throws(
     () => reviewCandidate(
