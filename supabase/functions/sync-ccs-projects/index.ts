@@ -113,7 +113,7 @@ Deno.serve(async request => {
       error_message: 'CCS sync lease expired before completion',
     })
     .eq('status', 'running')
-    .lt('started_at', staleCcsSyncCutoff(claimAttemptedAt));
+    .lt('started_at', staleCcsSyncCutoff(new Date(claimAttemptedAt)));
   if (leaseCleanupError) {
     return Response.json({ error: leaseCleanupError.message }, { status: 500 });
   }
