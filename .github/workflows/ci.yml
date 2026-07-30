@@ -62,7 +62,7 @@ jobs:
         run: deno test supabase/functions/_shared/*.test.ts
 
       - name: Type-check CCS sync function
-        run: deno check supabase/functions/sync-ccs-projects/index.ts
+        run: deno check --node-modules-dir=auto supabase/functions/sync-ccs-projects/index.ts
 
   database-tests:
     name: Database migrations and RLS
