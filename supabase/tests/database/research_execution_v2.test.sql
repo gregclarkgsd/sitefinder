@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(25);
+select plan(29);
 
 insert into auth.users (id, email, created_at, updated_at)
 values (
@@ -38,6 +38,12 @@ as $$
     )
   );
 $$;
+
+create temporary table v2_test_context (
+  key text primary key,
+  value text not null
+);
+grant select, insert, update on v2_test_context to service_role;
 
 create function pg_temp.research_manifest_v2(
   requested_claim_id uuid,
@@ -140,7 +146,8 @@ select ok(
       'public.research_evidence_revisions'::regclass,
       'public.research_run_completions'::regclass,
       'public.research_candidate_decisions'::regclass,
-      'public.research_contact_handoffs'::regclass
+      'public.research_contact_handoffs'::regclass,
+      'public.research_contact_handoff_attempts'::regclass
     )
   ),
   'all protocol-v2 public tables have RLS'
@@ -205,8 +212,60 @@ select ok(
     'service_role',
     'public.complete_research_run_v2(uuid,text,text,text)',
     'execute'
+  )
+  and has_function_privilege(
+    'service_role',
+    'public.create_research_run_v2(uuid,text,jsonb,text[],uuid,smallint)',
+    'execute'
+  )
+  and not has_table_privilege(
+    'service_role',
+    'public.research_run_claims',
+    'select, insert, update, delete'
   ),
   'the service role can execute the bounded worker RPCs'
+);
+select ok(
+  not private.research_sources_are_valid_v2(
+    array['website', null]::text[]
+  ),
+  'worker capability arrays reject SQL NULL elements'
+);
+select ok(
+  not private.research_contact_commitments_are_valid_v2(
+    jsonb_build_array(
+      jsonb_build_object(
+        'contactPointId', 'duplicate',
+        'kind', 'email',
+        'status', 'public',
+        'commitmentSha256', repeat('1', 64),
+        'domain', 'example.com'
+      ),
+      jsonb_build_object(
+        'contactPointId', 'duplicate',
+        'kind', 'phone',
+        'status', 'public',
+        'commitmentSha256', repeat('2', 64)
+      )
+    )
+  ),
+  'contact commitments reject duplicate contact point identifiers'
+);
+select ok(
+  not private.research_contact_commitments_are_valid_v2(
+    (
+      select jsonb_agg(
+        jsonb_build_object(
+          'contactPointId', 'contact-' || item,
+          'kind', 'phone',
+          'status', 'public',
+          'commitmentSha256', repeat('3', 64)
+        )
+      )
+      from generate_series(1, 17) as generated(item)
+    )
+  ),
+  'contact commitments enforce a bounded cardinality'
 );
 
 -- Lease race, idempotency, wrong-token rejection, reclaim, and dead-letter.
@@ -248,6 +307,17 @@ select is(
   'true',
   'first worker claims the queued run'
 );
+insert into v2_test_context (key, value)
+select
+  'lease_claim_id',
+  public.claim_research_run_v2(
+    '31000000-0000-0000-0000-000000000010',
+    'lease-worker-a',
+    array['website'],
+    'lease-token-a-0000000000000000000000000000',
+    pg_temp.research_attestation_v2('a'),
+    120
+  ) ->> 'claimId';
 select is(
   public.claim_research_run_v2(
     '31000000-0000-0000-0000-000000000010',
@@ -281,15 +351,23 @@ select throws_ok(
         120
       )
     $sql$,
-    (
-      select id from public.research_run_claims
-      where claim_request_id =
-        '31000000-0000-0000-0000-000000000010'
-    )
+    (select value from v2_test_context where key = 'lease_claim_id')
   ),
   '28000',
-  'research_claim_not_active',
+  'research_claim_token_invalid',
   'a wrong bearer token cannot extend a lease'
+);
+reset role;
+set local role service_role;
+select throws_ok(
+  $$
+    update public.research_runs
+    set name = 'Legacy bypass attempt'
+    where id = '31000000-0000-0000-0000-000000000001'
+  $$,
+  '55000',
+  'research_protocol_v2_rpc_required',
+  'direct service-role DML cannot bypass protocol-v2 RPCs'
 );
 reset role;
 select ok(
@@ -438,6 +516,17 @@ select public.claim_research_run_v2(
   pg_temp.research_attestation_v2('1'),
   300
 );
+insert into v2_test_context (key, value)
+select
+  'verified_claim_id',
+  public.claim_research_run_v2(
+    '33000000-0000-0000-0000-000000000010',
+    'verified-worker',
+    array['website'],
+    'verified-run-token-000000000000000000000000',
+    pg_temp.research_attestation_v2('1'),
+    300
+  ) ->> 'claimId';
 reset role;
 
 select lives_ok(
@@ -491,11 +580,17 @@ select lives_ok(
           'kind', 'email',
           'status', 'public',
           'domain', 'verified.example',
-          'commitmentSha256',
-            private.research_sha256_v2(
-              '0123456789abcdef' || E'\x1f' ||
-              'person@verified.example'
-            )
+            'commitmentSha256',
+              private.research_sha256_v2(
+                jsonb_build_object(
+                  'salt', '0123456789abcdef',
+                  'contactValue', 'person@verified.example',
+                  'runId',
+                    '33000000-0000-0000-0000-000000000001',
+                  'externalCandidateId', 'verified-person',
+                  'contactPointId', 'public-email-1'
+                )::text
+              )
         )
       )
     )::text
@@ -641,7 +736,9 @@ select throws_ok(
   format(
     $sql$
       select public.decide_research_candidate_v2(
-        %L::uuid, %L::uuid, %L, 'approved',
+        %L::uuid,
+        '33000000-0000-0000-0000-000000000030',
+        %L::uuid, %L, 'approved',
         'stale-input test',
         '30000000-0000-0000-0000-000000000001'
       )
@@ -672,7 +769,9 @@ select lives_ok(
   format(
     $sql$
       select public.decide_research_candidate_v2(
-        %L::uuid, %L::uuid, %L, 'approved',
+        %L::uuid,
+        '33000000-0000-0000-0000-000000000031',
+        %L::uuid, %L, 'approved',
         'evidence reviewed',
         '30000000-0000-0000-0000-000000000001'
       )
@@ -731,6 +830,7 @@ select lives_ok(
         begin
           perform public.submit_research_contact_handoff_v2(
             selected_handoff,
+            '33000000-0000-0000-0000-000000000040',
             'handoff-token-000000000000000000000000000',
             'person@verified.example',
             '0123456789abcdef'
@@ -745,6 +845,7 @@ select lives_ok(
         where email = 'person@verified.example';
         receipt := public.submit_research_contact_handoff_v2(
           selected_handoff,
+          '33000000-0000-0000-0000-000000000041',
           'handoff-token-000000000000000000000000000',
           'person@verified.example',
           '0123456789abcdef'

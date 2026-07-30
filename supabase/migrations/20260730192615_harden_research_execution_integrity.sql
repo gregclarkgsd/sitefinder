@@ -41,7 +41,8 @@ begin
   end if;
 
   foreach item in array value loop
-    if item not in ('website', 'apollo', 'companiesHouse', 'procurement')
+    if item is null
+      or item not in ('website', 'apollo', 'companiesHouse', 'procurement')
       or item = any(seen)
     then
       return false;
@@ -65,15 +66,22 @@ as $$
 declare
   item jsonb;
   item_key text;
+  contact_point_id text;
+  seen_contact_point_ids text[] := array[]::text[];
 begin
-  if value is null or jsonb_typeof(value) <> 'array' then
+  if value is null
+    or jsonb_typeof(value) <> 'array'
+    or jsonb_array_length(value) > 16
+  then
     return false;
   end if;
 
   for item in select element from jsonb_array_elements(value) as items(element)
   loop
+    contact_point_id := item ->> 'contactPointId';
     if jsonb_typeof(item) <> 'object'
-      or coalesce(item ->> 'contactPointId', '') !~ '^[A-Za-z0-9._:-]{1,120}$'
+      or coalesce(contact_point_id, '') !~ '^[A-Za-z0-9._:-]{1,120}$'
+      or contact_point_id = any(seen_contact_point_ids)
       or coalesce(item ->> 'kind', '') not in ('email', 'phone')
       or coalesce(item ->> 'status', '') not in (
         'public',
@@ -86,6 +94,10 @@ begin
     then
       return false;
     end if;
+    seen_contact_point_ids := array_append(
+      seen_contact_point_ids,
+      contact_point_id
+    );
 
     for item_key in select key from jsonb_object_keys(item) as keys(key)
     loop
@@ -108,6 +120,13 @@ begin
     then
       return false;
     end if;
+
+    if item ->> 'kind' = 'email'
+      and item ->> 'status' = 'public'
+      and not (item ? 'domain')
+    then
+      return false;
+    end if;
   end loop;
 
   return true;
@@ -124,7 +143,16 @@ parallel safe
 set search_path = ''
 as $$
   select coalesce(
-    jsonb_agg(element order by element ->> 'contactPointId'),
+    jsonb_agg(
+      element
+      order by
+        element ->> 'contactPointId',
+        element ->> 'kind',
+        element ->> 'status',
+        coalesce(element ->> 'domain', ''),
+        element ->> 'commitmentSha256',
+        element::text
+    ),
     '[]'::jsonb
   )
   from jsonb_array_elements(value) as items(element);
@@ -210,6 +238,7 @@ begin
       errcode = '23503',
       message = 'research_integrity_v2_cross_run_candidate';
   end if;
+
 end;
 $migration_integrity$;
 
@@ -272,6 +301,8 @@ create table public.research_run_claims (
     ),
   available_sources text[] not null
     check (private.research_sources_are_valid_v2(available_sources)),
+  request_sha256 text not null
+    check (request_sha256 ~ '^[0-9a-f]{64}$'),
   token_sha256 text not null
     check (token_sha256 ~ '^[0-9a-f]{64}$'),
   status text not null default 'active'
@@ -417,6 +448,14 @@ create table public.research_candidate_revisions (
     unique (candidate_id, id),
   constraint research_candidate_revisions_run_task_candidate_id_key
     unique (run_id, task_id, candidate_id, id),
+  constraint research_candidate_revisions_claim_lineage_key
+    unique (run_id, task_id, candidate_id, id, claim_id),
+  constraint research_candidate_revisions_run_content_key
+    unique (run_id, candidate_id, id, content_hash),
+  constraint research_candidate_revisions_evidence_hash_key
+    unique (id, evidence_content_hash),
+  constraint research_candidate_revisions_id_claim_key
+    unique (id, claim_id),
   constraint research_candidate_revisions_candidate_revision_key
     unique (candidate_id, revision_no),
   constraint research_candidate_revisions_previous_fkey
@@ -455,6 +494,29 @@ create table public.research_evidence_revisions (
       id
     )
     on delete restrict,
+  constraint research_evidence_revisions_claim_lineage_fkey
+    foreign key (
+      run_id,
+      task_id,
+      candidate_id,
+      candidate_revision_id,
+      claim_id
+    )
+    references public.research_candidate_revisions(
+      run_id,
+      task_id,
+      candidate_id,
+      id,
+      claim_id
+    )
+    on delete restrict,
+  constraint research_evidence_revisions_content_hash_fkey
+    foreign key (candidate_revision_id, content_hash)
+    references public.research_candidate_revisions(
+      id,
+      evidence_content_hash
+    )
+    on delete restrict,
   constraint research_evidence_revisions_claim_fkey
     foreign key (run_id, claim_id)
     references public.research_run_claims(run_id, id)
@@ -462,107 +524,6 @@ create table public.research_evidence_revisions (
   constraint research_evidence_revisions_revision_hash_key
     unique (candidate_revision_id, content_hash)
 );
-
--- Convert each mutable legacy candidate into an immutable baseline revision.
-with legacy as (
-  select
-    candidate.*,
-    private.research_sha256_v2(
-      jsonb_build_object(
-        'sourceKind', candidate.source_kind,
-        'sourceUrl', candidate.source_url,
-        'excerpt', candidate.evidence_excerpt
-      )::text
-    ) as evidence_hash
-  from public.research_candidates candidate
-),
-inserted as (
-  insert into public.research_candidate_revisions (
-    run_id,
-    task_id,
-    candidate_id,
-    revision_no,
-    name,
-    job_title,
-    role_category,
-    source_kind,
-    source_url,
-    evidence_excerpt,
-    evidence_content_hash,
-    crm_comparison,
-    email_status,
-    confidence,
-    contact_commitments,
-    content_hash,
-    observed_at,
-    created_at
-  )
-  select
-    legacy.run_id,
-    legacy.task_id,
-    legacy.id,
-    1,
-    legacy.name,
-    legacy.job_title,
-    legacy.role_category,
-    legacy.source_kind,
-    legacy.source_url,
-    legacy.evidence_excerpt,
-    legacy.evidence_hash,
-    legacy.crm_comparison,
-    legacy.email_status,
-    legacy.confidence,
-    '[]'::jsonb,
-    private.research_sha256_v2(
-      jsonb_build_object(
-        'name', trim(legacy.name),
-        'jobTitle', trim(legacy.job_title),
-        'roleCategory', trim(legacy.role_category),
-        'evidenceContentHash', legacy.evidence_hash,
-        'crmComparison', legacy.crm_comparison,
-        'emailStatus', legacy.email_status,
-        'confidence', legacy.confidence,
-        'contactCommitments', '[]'::jsonb
-      )::text
-    ),
-    legacy.updated_at,
-    legacy.created_at
-  from legacy
-  returning id, candidate_id, content_hash
-)
-update public.research_candidates candidate
-set
-  current_revision_id = inserted.id,
-  current_content_hash = inserted.content_hash
-from inserted
-where candidate.id = inserted.candidate_id;
-
-insert into public.research_evidence_revisions (
-  run_id,
-  task_id,
-  candidate_id,
-  candidate_revision_id,
-  source_kind,
-  source_url,
-  excerpt,
-  captured_at,
-  content_hash,
-  created_at
-)
-select
-  candidate.run_id,
-  candidate.task_id,
-  candidate.id,
-  revision.id,
-  revision.source_kind,
-  revision.source_url,
-  revision.evidence_excerpt,
-  revision.observed_at,
-  revision.evidence_content_hash,
-  revision.created_at
-from public.research_candidates candidate
-join public.research_candidate_revisions revision
-  on revision.id = candidate.current_revision_id;
 
 alter table public.research_candidates
   add constraint research_candidates_current_revision_fkey
@@ -574,6 +535,8 @@ create table public.research_run_completions (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null,
   claim_id uuid not null,
+  manifest_text text not null
+    check (octet_length(manifest_text) between 2 and 262144),
   manifest jsonb not null check (jsonb_typeof(manifest) = 'object'),
   manifest_sha256 text not null
     check (manifest_sha256 ~ '^[0-9a-f]{64}$'),
@@ -621,8 +584,13 @@ create table public.research_completion_candidate_revisions (
     references public.research_run_completions(run_id, id)
     on delete restrict,
   constraint research_completion_candidate_revisions_revision_fkey
-    foreign key (candidate_id, revision_id)
-    references public.research_candidate_revisions(candidate_id, id)
+    foreign key (run_id, candidate_id, revision_id, content_hash)
+    references public.research_candidate_revisions(
+      run_id,
+      candidate_id,
+      id,
+      content_hash
+    )
     on delete restrict
 );
 
@@ -634,6 +602,12 @@ create table public.research_candidate_decisions (
   revision_content_hash text not null
     check (revision_content_hash ~ '^[0-9a-f]{64}$'),
   claim_id uuid,
+  decision_request_id uuid,
+  request_sha256 text
+    check (
+      request_sha256 is null
+      or request_sha256 ~ '^[0-9a-f]{64}$'
+    ),
   decision text not null
     check (decision in ('approved', 'rejected', 'investigate')),
   reason text not null
@@ -651,8 +625,22 @@ create table public.research_candidate_decisions (
   input_expires_at timestamptz,
   created_at timestamptz not null default now(),
   constraint research_candidate_decisions_candidate_revision_fkey
-    foreign key (candidate_id, revision_id)
-    references public.research_candidate_revisions(candidate_id, id)
+    foreign key (
+      run_id,
+      candidate_id,
+      revision_id,
+      revision_content_hash
+    )
+    references public.research_candidate_revisions(
+      run_id,
+      candidate_id,
+      id,
+      content_hash
+    )
+    on delete restrict,
+  constraint research_candidate_decisions_revision_claim_fkey
+    foreign key (revision_id, claim_id)
+    references public.research_candidate_revisions(id, claim_id)
     on delete restrict,
   constraint research_candidate_decisions_claim_fkey
     foreign key (run_id, claim_id)
@@ -660,6 +648,8 @@ create table public.research_candidate_decisions (
     on delete restrict,
   constraint research_candidate_decisions_candidate_id_id_key
     unique (candidate_id, id),
+  constraint research_candidate_decisions_handoff_key
+    unique (run_id, candidate_id, id, revision_id),
   constraint research_candidate_decisions_previous_fkey
     foreign key (candidate_id, previous_decision_id)
     references public.research_candidate_decisions(candidate_id, id)
@@ -670,36 +660,12 @@ create table public.research_candidate_decisions (
 
 create index research_candidate_decisions_candidate_time_idx
   on public.research_candidate_decisions(candidate_id, decided_at desc);
-
-insert into public.research_candidate_decisions (
-  run_id,
-  candidate_id,
-  revision_id,
-  revision_content_hash,
-  decision,
-  reason,
-  decided_by,
-  decided_at,
-  created_at
-)
-select
-  candidate.run_id,
-  candidate.id,
-  candidate.current_revision_id,
-  candidate.current_content_hash,
-  candidate.review_status,
-  'legacy_projection_backfill',
-  candidate.reviewed_by,
-  candidate.reviewed_at,
-  candidate.reviewed_at
-from public.research_candidates candidate
-where candidate.review_status <> 'pending';
-
-update public.research_candidates candidate
-set current_decision_id = decision.id
-from public.research_candidate_decisions decision
-where decision.candidate_id = candidate.id
-  and decision.reason = 'legacy_projection_backfill';
+create unique index research_candidate_decisions_request_uidx
+  on public.research_candidate_decisions(
+    candidate_id,
+    decision_request_id
+  )
+  where decision_request_id is not null;
 
 alter table public.research_candidates
   add constraint research_candidates_current_decision_fkey
@@ -721,6 +687,12 @@ create table public.research_contact_handoffs (
   kind text not null check (kind in ('email', 'phone')),
   commitment_sha256 text not null
     check (commitment_sha256 ~ '^[0-9a-f]{64}$'),
+  expected_domain text not null
+    check (
+      expected_domain = lower(expected_domain)
+      and expected_domain ~
+        '^[a-z0-9](?:[a-z0-9.-]{1,251}[a-z0-9])?$'
+    ),
   status text not null default 'requested'
     check (status in (
       'requested',
@@ -738,6 +710,7 @@ create table public.research_contact_handoffs (
       )
     ),
   claim_request_id uuid,
+  current_attempt_id uuid,
   token_sha256 text
     check (
       token_sha256 is null
@@ -756,13 +729,14 @@ create table public.research_contact_handoffs (
       or length(trim(failure_code)) between 1 and 120
     ),
   updated_at timestamptz not null default now(),
-  constraint research_contact_handoffs_candidate_revision_fkey
-    foreign key (candidate_id, revision_id)
-    references public.research_candidate_revisions(candidate_id, id)
-    on delete restrict,
   constraint research_contact_handoffs_candidate_decision_fkey
-    foreign key (candidate_id, decision_id)
-    references public.research_candidate_decisions(candidate_id, id)
+    foreign key (run_id, candidate_id, decision_id, revision_id)
+    references public.research_candidate_decisions(
+      run_id,
+      candidate_id,
+      id,
+      revision_id
+    )
     on delete restrict,
   constraint research_contact_handoffs_decision_point_key
     unique (decision_id, contact_point_id),
@@ -784,10 +758,59 @@ create table public.research_contact_handoffs (
 create index research_contact_handoffs_status_idx
   on public.research_contact_handoffs(status, requested_at);
 
+create table public.research_contact_handoff_attempts (
+  id uuid primary key default gen_random_uuid(),
+  handoff_id uuid not null
+    references public.research_contact_handoffs(id) on delete restrict,
+  attempt_no smallint not null check (attempt_no between 1 and 3),
+  worker_id text not null
+    check (
+      length(worker_id) between 1 and 120
+      and worker_id ~ '^[A-Za-z0-9._-]+$'
+    ),
+  claim_request_id uuid not null,
+  token_sha256 text not null
+    check (token_sha256 ~ '^[0-9a-f]{64}$'),
+  status text not null default 'claimed'
+    check (status in ('claimed', 'verified', 'expired', 'blocked')),
+  lease_started_at timestamptz not null,
+  lease_expires_at timestamptz not null,
+  ended_at timestamptz,
+  end_code text
+    check (
+      end_code is null
+      or length(trim(end_code)) between 1 and 120
+    ),
+  created_at timestamptz not null default now(),
+  constraint research_contact_handoff_attempts_handoff_attempt_key
+    unique (handoff_id, attempt_no),
+  constraint research_contact_handoff_attempts_handoff_id_id_key
+    unique (handoff_id, id),
+  constraint research_contact_handoff_attempts_worker_request_key
+    unique (worker_id, claim_request_id),
+  constraint research_contact_handoff_attempts_token_key
+    unique (token_sha256),
+  constraint research_contact_handoff_attempts_state_check
+    check (
+      (status = 'claimed' and ended_at is null and end_code is null)
+      or
+      (status <> 'claimed' and ended_at is not null and end_code is not null)
+    )
+);
+
+alter table public.research_contact_handoffs
+  add constraint research_contact_handoffs_current_attempt_fkey
+    foreign key (id, current_attempt_id)
+    references public.research_contact_handoff_attempts(handoff_id, id)
+    on delete restrict;
+
 create table private.research_contact_point_values (
   id uuid primary key default gen_random_uuid(),
   handoff_id uuid not null unique
     references public.research_contact_handoffs(id) on delete restrict,
+  submission_request_id uuid not null unique,
+  request_sha256 text not null
+    check (request_sha256 ~ '^[0-9a-f]{64}$'),
   kind text not null check (kind in ('email', 'phone')),
   contact_value text not null
     check (length(contact_value) between 3 and 320),
@@ -831,6 +854,10 @@ create trigger research_candidate_decisions_append_only
 before update or delete on public.research_candidate_decisions
 for each row execute function private.prevent_research_immutable_change_v2();
 
+create trigger research_contact_handoff_attempts_no_delete
+before delete on public.research_contact_handoff_attempts
+for each row execute function private.prevent_research_immutable_change_v2();
+
 create trigger research_contact_point_values_append_only
 before update or delete on private.research_contact_point_values
 for each row execute function private.prevent_research_immutable_change_v2();
@@ -843,21 +870,81 @@ set search_path = ''
 as $$
   select private.research_sha256_v2(
     coalesce(
-      string_agg(lower(trim(suppression.email)), E'\n'
-        order by lower(trim(suppression.email))),
-      ''
-    )
+      jsonb_agg(
+        lower(trim(suppression.email))
+        order by lower(trim(suppression.email))
+      ),
+      '[]'::jsonb
+    )::text
   )
   from public.outreach_suppressions suppression;
 $$;
 
-create or replace function private.require_active_research_claim_v2(
+create table private.research_suppression_gate_v2 (
+  singleton boolean primary key default true check (singleton),
+  revision bigint not null default 0 check (revision >= 0),
+  updated_at timestamptz not null default now()
+);
+
+insert into private.research_suppression_gate_v2 (singleton)
+values (true);
+
+alter table private.research_suppression_gate_v2 enable row level security;
+revoke all on private.research_suppression_gate_v2
+  from public, anon, authenticated;
+
+create or replace function private.bump_research_suppression_gate_v2()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update private.research_suppression_gate_v2
+  set
+    revision = revision + 1,
+    updated_at = statement_timestamp()
+  where singleton;
+  return null;
+end;
+$$;
+
+create trigger bump_research_suppression_gate_v2
+after insert or update or delete on public.outreach_suppressions
+for each statement
+execute function private.bump_research_suppression_gate_v2();
+
+create or replace function private.locked_research_suppression_hash_v2()
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  locked_revision bigint;
+begin
+  select gate.revision
+  into locked_revision
+  from private.research_suppression_gate_v2 gate
+  where gate.singleton
+  for update;
+
+  if not found then
+    raise exception using
+      errcode = '55000',
+      message = 'research_suppression_gate_missing';
+  end if;
+
+  return private.current_research_suppression_hash_v2();
+end;
+$$;
+
+create or replace function private.lock_research_claim_by_token_v2(
   claim_id uuid,
   claim_token text
 )
 returns public.research_run_claims
 language plpgsql
-stable
 set search_path = ''
 as $$
 #variable_conflict use_variable
@@ -876,13 +963,42 @@ begin
   into claim
   from public.research_run_claims stored_claim
   where stored_claim.id = claim_id
-    and stored_claim.status = 'active'
     and stored_claim.token_sha256 =
       private.research_sha256_v2(claim_token)
-    and stored_claim.lease_expires_at > statement_timestamp()
-    and stored_claim.absolute_expires_at > statement_timestamp();
+  for update;
 
   if not found then
+    raise exception using
+      errcode = '28000',
+      message = 'research_claim_token_invalid';
+  end if;
+
+  return claim;
+end;
+$$;
+
+create or replace function private.require_active_research_claim_v2(
+  claim_id uuid,
+  claim_token text
+)
+returns public.research_run_claims
+language plpgsql
+set search_path = ''
+as $$
+declare
+  claim public.research_run_claims;
+  operation_time timestamptz;
+begin
+  claim := private.lock_research_claim_by_token_v2(
+    claim_id,
+    claim_token
+  );
+  operation_time := clock_timestamp();
+
+  if claim.status <> 'active'
+    or claim.lease_expires_at <= operation_time
+    or claim.absolute_expires_at <= operation_time
+  then
     raise exception using
       errcode = '28000',
       message = 'research_claim_not_active';
@@ -894,22 +1010,270 @@ $$;
 
 revoke all on function private.current_research_suppression_hash_v2()
   from public, anon, authenticated;
+revoke all on function private.bump_research_suppression_gate_v2()
+  from public, anon, authenticated;
+revoke all on function private.locked_research_suppression_hash_v2()
+  from public, anon, authenticated;
+revoke all on function private.lock_research_claim_by_token_v2(uuid, text)
+  from public, anon, authenticated;
 revoke all on function private.require_active_research_claim_v2(uuid, text)
   from public, anon, authenticated;
+
+do $owner_check$
+begin
+  if current_user <> 'postgres' then
+    raise exception using
+      errcode = '42501',
+      message = 'research_integrity_v2_requires_postgres_owner';
+  end if;
+end;
+$owner_check$;
+
+create or replace function private.guard_research_protocol_v2_write()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  old_protocol smallint;
+  new_protocol smallint;
+begin
+  if current_user = 'postgres' then
+    if tg_op = 'DELETE' then
+      return old;
+    end if;
+    return new;
+  end if;
+
+  if tg_table_name = 'research_runs' then
+    if tg_op <> 'INSERT' then
+      old_protocol := old.execution_protocol;
+    end if;
+    if tg_op <> 'DELETE' then
+      new_protocol := new.execution_protocol;
+    end if;
+  else
+    if tg_op <> 'INSERT' then
+      select run.execution_protocol
+      into old_protocol
+      from public.research_runs run
+      where run.id = old.run_id;
+    end if;
+    if tg_op <> 'DELETE' then
+      select run.execution_protocol
+      into new_protocol
+      from public.research_runs run
+      where run.id = new.run_id;
+    end if;
+  end if;
+
+  if old_protocol = 2 or new_protocol = 2 then
+    raise exception using
+      errcode = '55000',
+      message = 'research_protocol_v2_rpc_required';
+  end if;
+
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function private.guard_research_protocol_v2_write()
+  from public, anon, authenticated;
+
+create trigger guard_research_runs_protocol_v2
+before insert or update or delete on public.research_runs
+for each row execute function private.guard_research_protocol_v2_write();
+
+create trigger guard_research_tasks_protocol_v2
+before insert or update or delete on public.research_tasks
+for each row execute function private.guard_research_protocol_v2_write();
+
+create trigger guard_research_events_protocol_v2
+before insert or update or delete on public.research_events
+for each row execute function private.guard_research_protocol_v2_write();
+
+create trigger guard_research_candidates_protocol_v2
+before insert or update or delete on public.research_candidates
+for each row execute function private.guard_research_protocol_v2_write();
+
+create or replace function public.create_research_run_v2(
+  requested_run_id uuid,
+  run_name text,
+  requested_companies jsonb,
+  requested_sources text[],
+  actor_id uuid,
+  requested_max_attempts smallint default 3
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  company jsonb;
+  company_key text;
+  company_count integer;
+  seen_company_ids text[] := array[]::text[];
+  normalized_companies jsonb := '[]'::jsonb;
+begin
+  if requested_run_id is null
+    or run_name is null
+    or length(trim(run_name)) not between 1 and 120
+    or actor_id is null
+    or requested_max_attempts is null
+    or requested_max_attempts not between 1 and 10
+    or not private.research_sources_are_valid_v2(requested_sources)
+    or jsonb_typeof(requested_companies) <> 'array'
+    or jsonb_array_length(requested_companies) not between 1 and 25
+  then
+    raise exception using
+      errcode = '22023',
+      message = 'research_run_v2_request_invalid';
+  end if;
+
+  for company in
+    select item
+    from jsonb_array_elements(requested_companies) companies(item)
+  loop
+    if jsonb_typeof(company) <> 'object'
+      or length(trim(coalesce(company ->> 'companyId', '')))
+        not between 1 and 240
+      or length(trim(coalesce(company ->> 'companyName', '')))
+        not between 1 and 240
+      or coalesce(company ->> 'domain', '') !~
+        '^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$'
+      or length(company ->> 'domain') not between 3 and 253
+      or company ->> 'domain' <> lower(company ->> 'domain')
+      or trim(company ->> 'companyId') = any(seen_company_ids)
+    then
+      raise exception using
+        errcode = '22023',
+        message = 'research_run_v2_company_invalid';
+    end if;
+
+    for company_key in
+      select key from jsonb_object_keys(company) keys(key)
+    loop
+      if company_key not in ('companyId', 'companyName', 'domain') then
+        raise exception using
+          errcode = '22023',
+          message = 'research_run_v2_company_shape_invalid';
+      end if;
+    end loop;
+
+    seen_company_ids := array_append(
+      seen_company_ids,
+      trim(company ->> 'companyId')
+    );
+    normalized_companies := normalized_companies || jsonb_build_array(
+      jsonb_build_object(
+        'companyId', trim(company ->> 'companyId'),
+        'companyName', trim(company ->> 'companyName'),
+        'domain', company ->> 'domain'
+      )
+    );
+  end loop;
+
+  company_count := jsonb_array_length(requested_companies);
+
+  insert into public.research_runs (
+    id,
+    name,
+    mode,
+    source,
+    status,
+    company_limit,
+    configuration,
+    execution_protocol,
+    max_attempts,
+    created_by,
+    updated_by
+  )
+  values (
+    requested_run_id,
+    trim(run_name),
+    'read_only',
+    'file',
+    'queued',
+    company_count,
+    jsonb_build_object(
+      'requestedSources', to_jsonb(requested_sources),
+      'companies', normalized_companies,
+      'requestedBy', actor_id,
+      'requestVersion', 2
+    ),
+    2,
+    requested_max_attempts,
+    actor_id,
+    actor_id
+  );
+
+  insert into public.research_tasks (
+    id,
+    run_id,
+    company_id,
+    company_name,
+    domain,
+    status,
+    created_by,
+    updated_by
+  )
+  select
+    gen_random_uuid(),
+    requested_run_id,
+    trim(item ->> 'companyId'),
+    trim(item ->> 'companyName'),
+    item ->> 'domain',
+    'waiting',
+    actor_id,
+    actor_id
+  from jsonb_array_elements(normalized_companies) company_rows(item);
+
+  insert into public.research_events (
+    run_id,
+    sequence,
+    event_type,
+    message,
+    created_by
+  )
+  values (
+    requested_run_id,
+    0,
+    'run',
+    'Research protocol-v2 request queued.',
+    actor_id
+  );
+
+  return jsonb_build_object(
+    'accepted', true,
+    'runId', requested_run_id,
+    'status', 'queued',
+    'companyCount', company_count,
+    'executionProtocol', 2
+  );
+end;
+$$;
 
 create or replace function public.reclaim_expired_research_claims_v2(
   claim_limit integer default 100
 )
 returns integer
 language plpgsql
+security definer
 set search_path = ''
 as $$
 #variable_conflict use_variable
 declare
   expired_claim public.research_run_claims;
+  expired_run public.research_runs;
+  next_status text;
+  operation_time timestamptz;
   reclaimed_count integer := 0;
 begin
-  if claim_limit not between 1 and 500 then
+  if claim_limit is null or claim_limit not between 1 and 500 then
     raise exception using
       errcode = '22023',
       message = 'research_reclaim_limit_invalid';
@@ -927,19 +1291,37 @@ begin
     for update skip locked
     limit claim_limit
   loop
+    operation_time := clock_timestamp();
     update public.research_run_claims
     set
       status = 'expired',
-      ended_at = statement_timestamp(),
+      ended_at = operation_time,
       end_code = 'lease_expired'
     where id = expired_claim.id
       and status = 'active';
 
     if found then
+      select run.*
+      into expired_run
+      from public.research_runs run
+      where run.id = expired_claim.run_id
+      for update;
+
+      next_status := case
+        when expired_run.status = 'stopping' then 'cancelled'
+        when expired_run.attempt_count >= expired_run.max_attempts
+          then 'dead_lettered'
+        when expired_run.status = 'paused' then 'paused'
+        else 'queued'
+      end;
+
       update public.research_tasks
       set
         claim_id = null,
-        status = 'waiting',
+        status = case
+          when next_status = 'cancelled' then 'skipped'
+          else 'waiting'
+        end,
         progress = 0,
         page_count = 0,
         contacts_found = 0,
@@ -948,9 +1330,12 @@ begin
         "current_role" = null,
         last_error = null,
         started_at = null,
-        completed_at = null,
+        completed_at = case
+          when next_status = 'cancelled' then operation_time
+          else null
+        end,
         updated_by = null,
-        updated_at = statement_timestamp()
+        updated_at = operation_time
       where run_id = expired_claim.run_id
         and claim_id = expired_claim.id;
 
@@ -963,34 +1348,30 @@ begin
         reviewed_at = null,
         current_decision_id = null,
         updated_by = null,
-        updated_at = statement_timestamp()
+        updated_at = operation_time
       where run_id = expired_claim.run_id
         and committed_at is null;
 
       update public.research_runs run
       set
-        status = case
-          when run.attempt_count >= run.max_attempts then 'dead_lettered'
-          else 'queued'
-        end,
+        status = next_status,
         failure_message = 'research_worker_lease_expired',
         completed_at = case
-          when run.attempt_count >= run.max_attempts
-            then statement_timestamp()
+          when next_status in ('dead_lettered', 'cancelled')
+            then operation_time
           else null
         end,
         dead_lettered_at = case
-          when run.attempt_count >= run.max_attempts
-            then statement_timestamp()
+          when next_status = 'dead_lettered' then operation_time
           else null
         end,
         dead_letter_reason = case
-          when run.attempt_count >= run.max_attempts
+          when next_status = 'dead_lettered'
             then 'maximum_claim_attempts_exhausted'
           else null
         end,
         updated_by = null,
-        updated_at = statement_timestamp()
+        updated_at = operation_time
       where run.id = expired_claim.run_id
         and run.execution_protocol = 2
         and run.verified_completion_id is null
@@ -1014,6 +1395,7 @@ create or replace function public.claim_research_run_v2(
 )
 returns jsonb
 language plpgsql
+security definer
 set search_path = ''
 as $$
 #variable_conflict use_variable
@@ -1021,6 +1403,7 @@ declare
   stored_claim public.research_run_claims;
   selected_run public.research_runs;
   token_hash text;
+  request_hash text;
   cleanup_ledger_hash text;
   cleanup_manifest_hash text;
   cleanup_approved_at timestamptz;
@@ -1036,6 +1419,7 @@ declare
   suppression_hash text;
   bounded_lease_seconds integer;
   next_attempt smallint;
+  operation_time timestamptz;
 begin
   if claim_request_id is null
     or worker_id is null
@@ -1044,50 +1428,67 @@ begin
     or not private.research_sources_are_valid_v2(available_sources)
     or claim_token is null
     or octet_length(claim_token) not between 32 and 256
+    or lease_seconds is null
     or lease_seconds not between 30 and 300
     or jsonb_typeof(input_attestation) <> 'object'
-    or input_attestation ->> 'schemaVersion' <> '2'
+    or input_attestation ->> 'schemaVersion' is distinct from '2'
   then
     raise exception using
       errcode = '22023',
       message = 'research_claim_request_invalid';
   end if;
 
-  token_hash := private.research_sha256_v2(claim_token);
-
-  select claim.*
-  into stored_claim
-  from public.research_run_claims claim
-  where claim.worker_id = claim_research_run_v2.worker_id
-    and claim.claim_request_id = claim_research_run_v2.claim_request_id;
-
-  if found then
-    if stored_claim.token_sha256 <> token_hash then
-      raise exception using
-        errcode = '28000',
-        message = 'research_claim_request_token_mismatch';
-    end if;
-
-    if stored_claim.status = 'active'
-      and stored_claim.lease_expires_at > statement_timestamp()
-      and stored_claim.absolute_expires_at > statement_timestamp()
-    then
-      return jsonb_build_object(
-        'claimed', true,
-        'idempotent', true,
-        'claimId', stored_claim.id,
-        'runId', stored_claim.run_id,
-        'attemptNo', stored_claim.attempt_no,
-        'leaseExpiresAt', stored_claim.lease_expires_at,
-        'inputExpiresAt', stored_claim.input_expires_at
-      );
-    end if;
-
-    return jsonb_build_object(
-      'claimed', false,
-      'reason', 'claim_request_already_ended'
-    );
+  if jsonb_typeof(input_attestation -> 'cleanup') is distinct from 'object'
+    or jsonb_typeof(input_attestation -> 'attio') is distinct from 'object'
+    or jsonb_typeof(input_attestation -> 'pipedrive') is distinct from 'object'
+  then
+    raise exception using
+      errcode = '22023',
+      message = 'research_input_attestation_shape_invalid';
   end if;
+
+  if (
+      select array_agg(key order by key)
+      from jsonb_object_keys(input_attestation) keys(key)
+    ) is distinct from array[
+      'attio',
+      'cleanup',
+      'pipedrive',
+      'schemaVersion'
+    ]::text[]
+    or (
+      select array_agg(key order by key)
+      from jsonb_object_keys(input_attestation -> 'cleanup') keys(key)
+    ) is distinct from array[
+      'approvedAt',
+      'ledgerSha256',
+      'manifestSha256'
+    ]::text[]
+    or (
+      select array_agg(key order by key)
+      from jsonb_object_keys(input_attestation -> 'attio') keys(key)
+    ) is distinct from array[
+      'completedAt',
+      'manifestSha256',
+      'peopleCount',
+      'peopleSha256'
+    ]::text[]
+    or (
+      select array_agg(key order by key)
+      from jsonb_object_keys(input_attestation -> 'pipedrive') keys(key)
+    ) is distinct from array[
+      'completedAt',
+      'manifestSha256',
+      'peopleCount',
+      'peopleSha256'
+    ]::text[]
+  then
+    raise exception using
+      errcode = '22023',
+      message = 'research_input_attestation_shape_invalid';
+  end if;
+
+  token_hash := private.research_sha256_v2(claim_token);
 
   begin
     cleanup_ledger_hash :=
@@ -1146,8 +1547,63 @@ begin
     attio_completed_at + interval '24 hours',
     pipedrive_completed_at + interval '24 hours'
   );
-  suppression_hash := private.current_research_suppression_hash_v2();
   bounded_lease_seconds := greatest(30, least(300, lease_seconds));
+  request_hash := private.research_sha256_v2(
+    jsonb_build_object(
+      'workerId', worker_id,
+      'availableSources', (
+        select jsonb_agg(source order by source)
+        from unnest(available_sources) sources(source)
+      ),
+      'inputAttestation', input_attestation,
+      'leaseSeconds', bounded_lease_seconds
+    )::text
+  );
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(
+      worker_id || E'\x1f' || claim_request_id::text,
+      0
+    )
+  );
+
+  select claim.*
+  into stored_claim
+  from public.research_run_claims claim
+  where claim.worker_id = claim_research_run_v2.worker_id
+    and claim.claim_request_id = claim_research_run_v2.claim_request_id
+  for update;
+
+  if found then
+    operation_time := clock_timestamp();
+    if stored_claim.token_sha256 is distinct from token_hash
+      or stored_claim.request_sha256 is distinct from request_hash
+    then
+      raise exception using
+        errcode = '28000',
+        message = 'research_claim_request_mismatch';
+    end if;
+
+    if stored_claim.status = 'active'
+      and stored_claim.lease_expires_at > operation_time
+      and stored_claim.absolute_expires_at > operation_time
+    then
+      return jsonb_build_object(
+        'claimed', true,
+        'idempotent', true,
+        'claimId', stored_claim.id,
+        'runId', stored_claim.run_id,
+        'attemptNo', stored_claim.attempt_no,
+        'leaseExpiresAt', stored_claim.lease_expires_at,
+        'inputExpiresAt', stored_claim.input_expires_at
+      );
+    end if;
+
+    return jsonb_build_object(
+      'claimed', false,
+      'reason', 'claim_request_already_ended'
+    );
+  end if;
 
   perform public.reclaim_expired_research_claims_v2(100);
 
@@ -1182,6 +1638,14 @@ begin
     return jsonb_build_object('claimed', false);
   end if;
 
+  suppression_hash := private.locked_research_suppression_hash_v2();
+  operation_time := clock_timestamp();
+  if input_expires_at <= operation_time then
+    raise exception using
+      errcode = '55000',
+      message = 'research_input_attestation_expired';
+  end if;
+
   next_attempt := selected_run.attempt_count + 1;
 
   update public.research_runs
@@ -1189,12 +1653,12 @@ begin
     status = 'running',
     attempt_count = next_attempt,
     failure_message = null,
-    started_at = coalesce(started_at, statement_timestamp()),
+    started_at = coalesce(started_at, operation_time),
     completed_at = null,
     dead_lettered_at = null,
     dead_letter_reason = null,
     updated_by = null,
-    updated_at = statement_timestamp()
+    updated_at = operation_time
   where id = selected_run.id;
 
   insert into public.research_run_claims (
@@ -1203,6 +1667,7 @@ begin
     attempt_no,
     worker_id,
     available_sources,
+    request_sha256,
     token_sha256,
     lease_started_at,
     heartbeat_at,
@@ -1228,11 +1693,12 @@ begin
     next_attempt,
     worker_id,
     available_sources,
+    request_hash,
     token_hash,
-    statement_timestamp(),
-    statement_timestamp(),
-    statement_timestamp() + make_interval(secs => bounded_lease_seconds),
-    statement_timestamp() + interval '2 hours',
+    operation_time,
+    operation_time,
+    operation_time + make_interval(secs => bounded_lease_seconds),
+    operation_time + interval '2 hours',
     cleanup_ledger_hash,
     cleanup_manifest_hash,
     cleanup_approved_at,
@@ -1263,7 +1729,7 @@ begin
     started_at = null,
     completed_at = null,
     updated_by = null,
-    updated_at = statement_timestamp()
+    updated_at = operation_time
   where run_id = selected_run.id;
 
   update public.research_candidates
@@ -1275,7 +1741,7 @@ begin
     reviewed_at = null,
     current_decision_id = null,
     updated_by = null,
-    updated_at = statement_timestamp()
+    updated_at = operation_time
   where run_id = selected_run.id;
 
   return jsonb_build_object(
@@ -1300,14 +1766,16 @@ create or replace function public.heartbeat_research_claim_v2(
 )
 returns jsonb
 language plpgsql
+security definer
 set search_path = ''
 as $$
 #variable_conflict use_variable
 declare
   claim public.research_run_claims;
   next_expiry timestamptz;
+  operation_time timestamptz;
 begin
-  if lease_seconds not between 30 and 300 then
+  if lease_seconds is null or lease_seconds not between 30 and 300 then
     raise exception using
       errcode = '22023',
       message = 'research_heartbeat_lease_invalid';
@@ -1317,14 +1785,20 @@ begin
     claim_id,
     claim_token
   );
+  operation_time := clock_timestamp();
   next_expiry := least(
-    statement_timestamp() + make_interval(secs => lease_seconds),
+    operation_time + make_interval(secs => lease_seconds),
     claim.absolute_expires_at
   );
+  if next_expiry <= operation_time then
+    raise exception using
+      errcode = '28000',
+      message = 'research_claim_not_active';
+  end if;
 
   update public.research_run_claims
   set
-    heartbeat_at = statement_timestamp(),
+    heartbeat_at = operation_time,
     lease_expires_at = next_expiry
   where id = claim.id
     and status = 'active';
@@ -1345,6 +1819,7 @@ create or replace function public.fail_research_claim_v2(
 )
 returns jsonb
 language plpgsql
+security definer
 set search_path = ''
 as $$
 #variable_conflict use_variable
@@ -1352,6 +1827,7 @@ declare
   claim public.research_run_claims;
   run public.research_runs;
   next_status text;
+  operation_time timestamptz;
 begin
   if failure_code is null
     or length(trim(failure_code)) not between 1 and 120
@@ -1373,22 +1849,28 @@ begin
   where stored_run.id = claim.run_id
   for update;
 
+  operation_time := clock_timestamp();
   next_status := case
+    when run.status = 'stopping' then 'cancelled'
     when run.attempt_count >= run.max_attempts then 'dead_lettered'
+    when run.status = 'paused' then 'paused'
     else 'queued'
   end;
 
   update public.research_run_claims
   set
     status = 'failed',
-    ended_at = statement_timestamp(),
+    ended_at = operation_time,
     end_code = trim(failure_code)
   where id = claim.id;
 
   update public.research_tasks
   set
     claim_id = null,
-    status = 'waiting',
+    status = case
+      when next_status = 'cancelled' then 'skipped'
+      else 'waiting'
+    end,
     progress = 0,
     page_count = 0,
     contacts_found = 0,
@@ -1397,9 +1879,12 @@ begin
     "current_role" = null,
     last_error = null,
     started_at = null,
-    completed_at = null,
+    completed_at = case
+      when next_status = 'cancelled' then operation_time
+      else null
+    end,
     updated_by = null,
-    updated_at = statement_timestamp()
+    updated_at = operation_time
   where run_id = claim.run_id
     and claim_id = claim.id;
 
@@ -1412,7 +1897,7 @@ begin
     reviewed_at = null,
     current_decision_id = null,
     updated_by = null,
-    updated_at = statement_timestamp()
+    updated_at = operation_time
   where run_id = claim.run_id
     and committed_at is null;
 
@@ -1421,11 +1906,11 @@ begin
     status = next_status,
     failure_message = trim(failure_code),
     completed_at = case
-      when next_status = 'dead_lettered' then statement_timestamp()
+      when next_status in ('dead_lettered', 'cancelled') then operation_time
       else null
     end,
     dead_lettered_at = case
-      when next_status = 'dead_lettered' then statement_timestamp()
+      when next_status = 'dead_lettered' then operation_time
       else null
     end,
     dead_letter_reason = case
@@ -1434,7 +1919,7 @@ begin
       else null
     end,
     updated_by = null,
-    updated_at = statement_timestamp()
+    updated_at = operation_time
   where id = claim.run_id;
 
   return jsonb_build_object(
@@ -1452,6 +1937,7 @@ create or replace function public.transition_research_run_v2(
 )
 returns jsonb
 language plpgsql
+security definer
 set search_path = ''
 as $$
 #variable_conflict use_variable
@@ -1459,6 +1945,8 @@ declare
   run public.research_runs;
   claim public.research_run_claims;
   next_status text;
+  reclaim_status text;
+  operation_time timestamptz;
 begin
   if action not in ('pause', 'resume', 'stop', 'cancel')
     or actor_id is null
@@ -1468,7 +1956,12 @@ begin
       message = 'research_run_transition_invalid';
   end if;
 
-  perform public.reclaim_expired_research_claims_v2(100);
+  select stored_claim.*
+  into claim
+  from public.research_run_claims stored_claim
+  where stored_claim.run_id = run_id
+    and stored_claim.status = 'active'
+  for update;
 
   select stored_run.*
   into run
@@ -1483,14 +1976,106 @@ begin
       message = 'research_run_not_found';
   end if;
 
-  select stored_claim.*
-  into claim
-  from public.research_run_claims stored_claim
-  where stored_claim.run_id = run.id
-    and stored_claim.status = 'active'
-    and stored_claim.lease_expires_at > statement_timestamp()
-    and stored_claim.absolute_expires_at > statement_timestamp()
-  for update;
+  -- If the initial claim lookup saw no row but the now-locked run says a worker
+  -- owns it, a concurrent claimer committed while this statement waited for
+  -- the run lock. Abort with a serialization error: retrying will observe and
+  -- lock the claim first, preserving the global claim -> run lock order.
+  if claim.id is null and run.status in ('running', 'stopping') then
+    raise exception using
+      errcode = '40001',
+      message = 'research_run_transition_retry';
+  end if;
+
+  operation_time := clock_timestamp();
+  if claim.id is not null
+    and (
+      claim.lease_expires_at <= operation_time
+      or claim.absolute_expires_at <= operation_time
+    )
+  then
+    update public.research_run_claims
+    set
+      status = 'expired',
+      ended_at = operation_time,
+      end_code = 'lease_expired'
+    where id = claim.id
+      and status = 'active';
+
+    reclaim_status := case
+      when run.status = 'stopping' then 'cancelled'
+      when run.attempt_count >= run.max_attempts then 'dead_lettered'
+      when run.status = 'paused' then 'paused'
+      else 'queued'
+    end;
+
+    update public.research_tasks
+    set
+      claim_id = null,
+      status = case
+        when reclaim_status = 'cancelled' then 'skipped'
+        else 'waiting'
+      end,
+      progress = 0,
+      page_count = 0,
+      contacts_found = 0,
+      current_url = null,
+      page_title = null,
+      "current_role" = null,
+      last_error = null,
+      started_at = null,
+      completed_at = case
+        when reclaim_status = 'cancelled' then operation_time
+        else null
+      end,
+      updated_by = null,
+      updated_at = operation_time
+    where research_tasks.run_id = run.id
+      and research_tasks.claim_id = claim.id;
+
+    update public.research_candidates
+    set
+      is_active = false,
+      committed_at = null,
+      review_status = 'pending',
+      reviewed_by = null,
+      reviewed_at = null,
+      current_decision_id = null,
+      updated_by = null,
+      updated_at = operation_time
+    where research_candidates.run_id = run.id
+      and committed_at is null;
+
+    update public.research_runs
+    set
+      status = reclaim_status,
+      failure_message = 'research_worker_lease_expired',
+      completed_at = case
+        when reclaim_status in ('dead_lettered', 'cancelled')
+          then operation_time
+        else null
+      end,
+      dead_lettered_at = case
+        when reclaim_status = 'dead_lettered' then operation_time
+        else null
+      end,
+      dead_letter_reason = case
+        when reclaim_status = 'dead_lettered'
+          then 'maximum_claim_attempts_exhausted'
+        else null
+      end,
+      updated_by = null,
+      updated_at = operation_time
+    where research_runs.id = run.id
+      and research_runs.verified_completion_id is null;
+
+    run.status := reclaim_status;
+    run.completed_at := case
+      when reclaim_status in ('dead_lettered', 'cancelled')
+        then operation_time
+      else null
+    end;
+    claim := null;
+  end if;
 
   next_status := case action
     when 'pause' then
@@ -1526,7 +2111,7 @@ begin
     update public.research_run_claims
     set
       status = 'revoked',
-      ended_at = statement_timestamp(),
+      ended_at = operation_time,
       end_code = 'cancelled_by_user'
     where id = claim.id;
 
@@ -1537,22 +2122,35 @@ begin
         when status in ('completed', 'review', 'skipped') then status
         else 'skipped'
       end,
-      completed_at = coalesce(completed_at, statement_timestamp()),
+      completed_at = coalesce(completed_at, operation_time),
       updated_by = actor_id,
-      updated_at = statement_timestamp()
+      updated_at = operation_time
     where research_tasks.run_id = run.id
       and research_tasks.claim_id = claim.id;
+
+    update public.research_candidates
+    set
+      is_active = false,
+      committed_at = null,
+      review_status = 'pending',
+      reviewed_by = null,
+      reviewed_at = null,
+      current_decision_id = null,
+      updated_by = actor_id,
+      updated_at = operation_time
+    where research_candidates.run_id = run.id
+      and committed_at is null;
   end if;
 
   update public.research_runs
   set
     status = next_status,
     completed_at = case
-      when next_status = 'cancelled' then statement_timestamp()
+      when next_status = 'cancelled' then operation_time
       else completed_at
     end,
     updated_by = actor_id,
-    updated_at = statement_timestamp()
+    updated_at = operation_time
   where id = run.id;
 
   return jsonb_build_object(
@@ -1578,6 +2176,7 @@ create or replace function public.transition_research_task_v2(
 )
 returns jsonb
 language plpgsql
+security definer
 set search_path = ''
 as $$
 #variable_conflict use_variable
@@ -1594,14 +2193,19 @@ begin
     'failed',
     'skipped'
   )
+    or progress is null
     or progress not between 0 and 100
+    or page_count is null
     or page_count < 0
+    or contacts_found is null
     or contacts_found < 0
     or (
       current_url is not null
       and (
         current_url !~ '^https://'
         or length(current_url) > 2000
+        or current_url ~ '[[:space:]?#]'
+        or split_part(substring(current_url from 9), '/', 1) like '%@%'
       )
     )
     or (page_title is not null and length(page_title) > 500)
@@ -1618,6 +2222,12 @@ begin
     claim_token
   );
 
+  select status
+  into run_status
+  from public.research_runs
+  where id = claim.run_id
+  for update;
+
   select stored_task.*
   into task
   from public.research_tasks stored_task
@@ -1631,11 +2241,6 @@ begin
       errcode = '23503',
       message = 'research_task_claim_mismatch';
   end if;
-
-  select status
-  into run_status
-  from public.research_runs
-  where id = claim.run_id;
 
   if run_status not in ('running', 'stopping')
     or (
@@ -1704,6 +2309,173 @@ begin
 end;
 $$;
 
+create or replace function public.append_research_event_v2(
+  claim_id uuid,
+  claim_token text,
+  idempotency_key uuid,
+  event_type text,
+  message text,
+  source_url text default null,
+  task_id uuid default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_variable
+declare
+  claim public.research_run_claims;
+  existing_event public.research_events;
+  event_hash text;
+  event_id bigint;
+  next_sequence integer;
+  run_status text;
+begin
+  if idempotency_key is null
+    or event_type not in (
+      'run',
+      'company',
+      'robots',
+      'page',
+      'pdf',
+      'candidate',
+      'comparison',
+      'warning',
+      'error'
+    )
+    or message is null
+    or length(trim(message)) not between 1 and 1000
+    or (
+      source_url is not null
+      and (
+        source_url !~ '^https://'
+        or length(source_url) > 2000
+        or source_url ~ '[[:space:]?#]'
+        or split_part(substring(source_url from 9), '/', 1) like '%@%'
+      )
+    )
+  then
+    raise exception using
+      errcode = '22023',
+      message = 'research_event_v2_invalid';
+  end if;
+
+  claim := private.require_active_research_claim_v2(
+    claim_id,
+    claim_token
+  );
+
+  select status
+  into run_status
+  from public.research_runs
+  where id = claim.run_id
+  for update;
+
+  if run_status not in ('running', 'stopping') then
+    raise exception using
+      errcode = '55000',
+      message = 'research_event_run_not_writable';
+  end if;
+
+  if task_id is not null
+    and not exists (
+      select 1
+      from public.research_tasks task
+      where task.id = task_id
+        and task.run_id = claim.run_id
+        and task.claim_id = claim.id
+    )
+  then
+    raise exception using
+      errcode = '23503',
+      message = 'research_event_task_claim_mismatch';
+  end if;
+
+  select event.*
+  into existing_event
+  from public.research_events event
+  where event.claim_id = claim.id
+    and event.idempotency_key = idempotency_key;
+
+  if found then
+    event_hash := private.research_sha256_v2(
+      jsonb_build_object(
+        'runId', claim.run_id,
+        'claimId', claim.id,
+        'taskId', task_id,
+        'sequence', existing_event.sequence,
+        'eventType', event_type,
+        'message', trim(message),
+        'sourceUrl', source_url
+      )::text
+    );
+    if existing_event.content_hash is distinct from event_hash then
+      raise exception using
+        errcode = '23505',
+        message = 'research_event_idempotency_conflict';
+    end if;
+    return jsonb_build_object(
+      'accepted', true,
+      'idempotent', true,
+      'eventId', existing_event.id,
+      'contentHash', existing_event.content_hash
+    );
+  end if;
+
+  select coalesce(max(event.sequence), 0) + 1
+  into next_sequence
+  from public.research_events event
+  where event.run_id = claim.run_id;
+
+  event_hash := private.research_sha256_v2(
+    jsonb_build_object(
+      'runId', claim.run_id,
+      'claimId', claim.id,
+      'taskId', task_id,
+      'sequence', next_sequence,
+      'eventType', event_type,
+      'message', trim(message),
+      'sourceUrl', source_url
+    )::text
+  );
+
+  insert into public.research_events (
+    run_id,
+    task_id,
+    claim_id,
+    idempotency_key,
+    sequence,
+    event_type,
+    message,
+    source_url,
+    content_hash,
+    created_by
+  )
+  values (
+    claim.run_id,
+    task_id,
+    claim.id,
+    idempotency_key,
+    next_sequence,
+    event_type,
+    trim(message),
+    source_url,
+    event_hash,
+    null
+  )
+  returning id into event_id;
+
+  return jsonb_build_object(
+    'accepted', true,
+    'idempotent', false,
+    'eventId', event_id,
+    'sequence', next_sequence,
+    'contentHash', event_hash
+  );
+end;
+$$;
+
 create or replace function public.append_research_candidate_revision_v2(
   claim_id uuid,
   claim_token text,
@@ -1713,6 +2485,7 @@ create or replace function public.append_research_candidate_revision_v2(
 )
 returns jsonb
 language plpgsql
+security definer
 set search_path = ''
 as $$
 #variable_conflict use_variable
@@ -1738,6 +2511,9 @@ declare
   normalized_commitments jsonb;
   evidence_hash text;
   content_hash text;
+  run_status text;
+  run_configuration jsonb;
+  required_source text;
 begin
   claim := private.require_active_research_claim_v2(
     claim_id,
@@ -1751,6 +2527,18 @@ begin
     raise exception using
       errcode = '22023',
       message = 'research_candidate_payload_invalid';
+  end if;
+
+  select status, configuration
+  into run_status, run_configuration
+  from public.research_runs
+  where id = claim.run_id
+  for update;
+
+  if run_status not in ('running', 'stopping') then
+    raise exception using
+      errcode = '55000',
+      message = 'research_candidate_run_not_writable';
   end if;
 
   select stored_task.*
@@ -1799,6 +2587,8 @@ begin
     )
     or source_url !~ '^https://'
     or length(source_url) > 2000
+    or source_url ~ '[[:space:]?#]'
+    or split_part(substring(source_url from 9), '/', 1) like '%@%'
     or (
       evidence_excerpt is not null
       and length(evidence_excerpt) > 4000
@@ -1825,6 +2615,28 @@ begin
     raise exception using
       errcode = '22023',
       message = 'research_candidate_payload_invalid';
+  end if;
+
+  required_source := case source_kind
+    when 'official_website' then 'website'
+    when 'apollo' then 'apollo'
+    when 'companies_house' then 'companiesHouse'
+    when 'procurement' then 'procurement'
+  end;
+
+  if required_source is null
+    or not (required_source = any(claim.available_sources))
+    or not exists (
+      select 1
+      from jsonb_array_elements_text(
+        run_configuration -> 'requestedSources'
+      ) requested(source)
+      where requested.source = required_source
+    )
+  then
+    raise exception using
+      errcode = '55000',
+      message = 'research_candidate_source_not_authorized';
   end if;
 
   normalized_commitments :=
@@ -2066,6 +2878,7 @@ create or replace function public.complete_research_run_v2(
 )
 returns jsonb
 language plpgsql
+security definer
 set search_path = ''
 as $$
 #variable_conflict use_variable
@@ -2079,6 +2892,8 @@ declare
   company_count integer;
   page_count integer;
   candidate_count integer;
+  suppression_hash text;
+  operation_time timestamptz;
 begin
   if manifest_text is null
     or octet_length(manifest_text) not between 2 and 262144
@@ -2106,14 +2921,15 @@ begin
         message = 'research_completion_manifest_invalid';
   end;
 
+  claim := private.lock_research_claim_by_token_v2(
+    claim_id,
+    claim_token
+  );
+
   select stored_completion.*
   into completion
   from public.research_run_completions stored_completion
-  join public.research_run_claims stored_claim
-    on stored_claim.id = stored_completion.claim_id
-  where stored_completion.claim_id = claim_id
-    and stored_claim.token_sha256 =
-      private.research_sha256_v2(claim_token);
+  where stored_completion.claim_id = claim.id;
 
   if found then
     if completion.manifest_sha256 <> manifest_sha256 then
@@ -2135,14 +2951,36 @@ begin
     claim_token
   );
 
-  if claim.input_expires_at <= statement_timestamp()
-    or claim.suppression_set_sha256 <>
-      private.current_research_suppression_hash_v2()
+  perform run.id
+  from public.research_runs run
+  where run.id = claim.run_id
+  for update;
+
+  perform task.id
+  from public.research_tasks task
+  where task.run_id = claim.run_id
+  order by task.id
+  for update;
+
+  perform candidate.id
+  from public.research_candidates candidate
+  where candidate.run_id = claim.run_id
+  order by candidate.id
+  for update;
+
+  suppression_hash := private.locked_research_suppression_hash_v2();
+  operation_time := clock_timestamp();
+
+  if claim.input_expires_at <= operation_time
+    or claim.lease_expires_at <= operation_time
+    or claim.absolute_expires_at <= operation_time
+    or claim.suppression_set_sha256 is distinct from suppression_hash
     or jsonb_typeof(manifest) <> 'object'
-    or manifest ->> 'schemaVersion' <> '2'
-    or manifest ->> 'kind' <> 'research_execution_completion'
-    or manifest ->> 'runId' <> claim.run_id::text
-    or manifest ->> 'claimId' <> claim.id::text
+    or manifest ->> 'schemaVersion' is distinct from '2'
+    or manifest ->> 'kind' is distinct from
+      'research_execution_completion'
+    or manifest ->> 'runId' is distinct from claim.run_id::text
+    or manifest ->> 'claimId' is distinct from claim.id::text
     or jsonb_typeof(manifest -> 'counts') <> 'object'
     or jsonb_typeof(manifest -> 'inputs') <> 'object'
     or (
@@ -2184,19 +3022,19 @@ begin
       message = 'research_completion_freshness_or_shape_denied';
   end if;
 
-  if manifest #>> '{inputs,cleanupLedgerSha256}' <>
+  if manifest #>> '{inputs,cleanupLedgerSha256}' is distinct from
       claim.cleanup_ledger_sha256
-    or manifest #>> '{inputs,cleanupManifestSha256}' <>
+    or manifest #>> '{inputs,cleanupManifestSha256}' is distinct from
       claim.cleanup_manifest_sha256
-    or manifest #>> '{inputs,attioPeopleSha256}' <>
+    or manifest #>> '{inputs,attioPeopleSha256}' is distinct from
       claim.attio_people_sha256
-    or manifest #>> '{inputs,attioManifestSha256}' <>
+    or manifest #>> '{inputs,attioManifestSha256}' is distinct from
       claim.attio_manifest_sha256
-    or manifest #>> '{inputs,pipedrivePeopleSha256}' <>
+    or manifest #>> '{inputs,pipedrivePeopleSha256}' is distinct from
       claim.pipedrive_people_sha256
-    or manifest #>> '{inputs,pipedriveManifestSha256}' <>
+    or manifest #>> '{inputs,pipedriveManifestSha256}' is distinct from
       claim.pipedrive_manifest_sha256
-    or manifest #>> '{inputs,suppressionSetSha256}' <>
+    or manifest #>> '{inputs,suppressionSetSha256}' is distinct from
       claim.suppression_set_sha256
   then
     raise exception using
@@ -2269,13 +3107,13 @@ begin
     and revision.claim_id = claim.id;
 
   begin
-    if manifest ->> 'candidateSetSha256' <> candidate_set_hash
-      or manifest ->> 'taskSetSha256' <> task_set_hash
-      or (manifest #>> '{counts,companiesChecked}')::integer <>
+    if manifest ->> 'candidateSetSha256' is distinct from candidate_set_hash
+      or manifest ->> 'taskSetSha256' is distinct from task_set_hash
+      or (manifest #>> '{counts,companiesChecked}')::integer is distinct from
         company_count
-      or (manifest #>> '{counts,pagesInspected}')::integer <>
+      or (manifest #>> '{counts,pagesInspected}')::integer is distinct from
         page_count
-      or (manifest #>> '{counts,peopleFound}')::integer <>
+      or (manifest #>> '{counts,peopleFound}')::integer is distinct from
         candidate_count
     then
       raise exception using
@@ -2292,6 +3130,7 @@ begin
   insert into public.research_run_completions (
     run_id,
     claim_id,
+    manifest_text,
     manifest,
     manifest_sha256,
     candidate_set_sha256,
@@ -2305,6 +3144,7 @@ begin
   values (
     claim.run_id,
     claim.id,
+    manifest_text,
     manifest,
     manifest_sha256,
     candidate_set_hash,
@@ -2339,9 +3179,9 @@ begin
 
   update public.research_candidates candidate
   set
-    committed_at = statement_timestamp(),
+    committed_at = operation_time,
     updated_by = null,
-    updated_at = statement_timestamp()
+    updated_at = operation_time
   where candidate.run_id = claim.run_id
     and candidate.is_active
     and exists (
@@ -2354,7 +3194,7 @@ begin
   update public.research_run_claims
   set
     status = 'completed',
-    ended_at = statement_timestamp(),
+    ended_at = operation_time,
     end_code = 'manifest_verified'
   where id = claim.id;
 
@@ -2366,9 +3206,9 @@ begin
     people_found = candidate_count,
     failure_message = null,
     verified_completion_id = completion.id,
-    completed_at = statement_timestamp(),
+    completed_at = operation_time,
     updated_by = null,
-    updated_at = statement_timestamp()
+    updated_at = operation_time
   where id = claim.run_id
     and execution_protocol = 2
     and status in ('running', 'stopping');
@@ -2393,6 +3233,7 @@ $$;
 
 create or replace function public.decide_research_candidate_v2(
   candidate_id uuid,
+  decision_request_id uuid,
   expected_revision_id uuid,
   expected_content_hash text,
   decision text,
@@ -2401,6 +3242,7 @@ create or replace function public.decide_research_candidate_v2(
 )
 returns jsonb
 language plpgsql
+security definer
 set search_path = ''
 as $$
 #variable_conflict use_variable
@@ -2413,8 +3255,13 @@ declare
   public_email_count integer;
   contact_point_id text;
   commitment_hash text;
+  contact_domain text;
+  request_hash text;
+  suppression_hash text;
+  operation_time timestamptz;
 begin
-  if expected_content_hash !~ '^[0-9a-f]{64}$'
+  if decision_request_id is null
+    or expected_content_hash !~ '^[0-9a-f]{64}$'
     or decision not in ('approved', 'rejected', 'investigate')
     or reason is null
     or length(trim(reason)) not between 1 and 500
@@ -2424,6 +3271,17 @@ begin
       errcode = '22023',
       message = 'research_decision_request_invalid';
   end if;
+
+  request_hash := private.research_sha256_v2(
+    jsonb_build_object(
+      'candidateId', candidate_id,
+      'expectedRevisionId', expected_revision_id,
+      'expectedContentHash', expected_content_hash,
+      'decision', decision,
+      'reason', trim(reason),
+      'actorId', actor_id
+    )::text
+  );
 
   select stored_candidate.*
   into candidate
@@ -2440,6 +3298,34 @@ begin
     raise exception using
       errcode = '55000',
       message = 'research_decision_stale_candidate';
+  end if;
+
+  select stored_decision.*
+  into decision_row
+  from public.research_candidate_decisions stored_decision
+  where stored_decision.candidate_id = candidate_id
+    and stored_decision.decision_request_id = decision_request_id;
+
+  if found then
+    if decision_row.request_sha256 is distinct from request_hash then
+      raise exception using
+        errcode = '23505',
+        message = 'research_decision_request_conflict';
+    end if;
+    select handoff.id
+    into handoff_id
+    from public.research_contact_handoffs handoff
+    where handoff.decision_id = decision_row.id;
+    return jsonb_build_object(
+      'accepted', true,
+      'idempotent', true,
+      'decisionId', decision_row.id,
+      'candidateId', decision_row.candidate_id,
+      'decision', decision_row.decision,
+      'handoffId', handoff_id,
+      'crmWritebackAuthorized', false,
+      'outreachAuthorized', false
+    );
   end if;
 
   select stored_revision.*
@@ -2469,10 +3355,12 @@ begin
     and stored_claim.run_id = candidate.run_id
     and stored_claim.status = 'completed';
 
+  suppression_hash := private.locked_research_suppression_hash_v2();
+  operation_time := clock_timestamp();
+
   if not found
-    or claim.input_expires_at <= statement_timestamp()
-    or claim.suppression_set_sha256 <>
-      private.current_research_suppression_hash_v2()
+    or claim.input_expires_at <= operation_time
+    or claim.suppression_set_sha256 is distinct from suppression_hash
   then
     raise exception using
       errcode = '55000',
@@ -2482,8 +3370,13 @@ begin
   select
     count(*)::integer,
     max(commitment ->> 'contactPointId'),
-    max(commitment ->> 'commitmentSha256')
-  into public_email_count, contact_point_id, commitment_hash
+    max(commitment ->> 'commitmentSha256'),
+    max(commitment ->> 'domain')
+  into
+    public_email_count,
+    contact_point_id,
+    commitment_hash,
+    contact_domain
   from jsonb_array_elements(revision.contact_commitments)
     as commitments(commitment)
   where commitment ->> 'kind' = 'email'
@@ -2502,18 +3395,43 @@ begin
       message = 'research_decision_approval_ineligible';
   end if;
 
+  update public.research_contact_handoffs
+  set
+    status = 'blocked',
+    failure_code = 'superseded_by_human_decision',
+    updated_at = operation_time
+  where research_contact_handoffs.candidate_id = candidate.id
+    and status in ('requested', 'claimed');
+
+  update public.research_contact_handoff_attempts attempt
+  set
+    status = 'blocked',
+    ended_at = operation_time,
+    end_code = 'superseded_by_human_decision'
+  where attempt.status = 'claimed'
+    and exists (
+      select 1
+      from public.research_contact_handoffs handoff
+      where handoff.id = attempt.handoff_id
+        and handoff.candidate_id = candidate.id
+    );
+
   insert into public.research_candidate_decisions (
     run_id,
     candidate_id,
     revision_id,
     revision_content_hash,
     claim_id,
+    decision_request_id,
+    request_sha256,
     decision,
     reason,
     previous_decision_id,
     decided_by,
     suppression_set_sha256,
-    input_expires_at
+    input_expires_at,
+    decided_at,
+    created_at
   )
   values (
     candidate.run_id,
@@ -2521,12 +3439,16 @@ begin
     revision.id,
     revision.content_hash,
     claim.id,
+    decision_request_id,
+    request_hash,
     decision,
     trim(reason),
     candidate.current_decision_id,
     actor_id,
     claim.suppression_set_sha256,
-    claim.input_expires_at
+    claim.input_expires_at,
+    operation_time,
+    operation_time
   )
   returning * into decision_row;
 
@@ -2549,6 +3471,7 @@ begin
       contact_point_id,
       kind,
       commitment_sha256,
+      expected_domain,
       requested_by
     )
     values (
@@ -2559,6 +3482,7 @@ begin
       contact_point_id,
       'email',
       commitment_hash,
+      contact_domain,
       actor_id
     )
     returning id into handoff_id;
@@ -2567,13 +3491,14 @@ begin
     set
       status = 'blocked',
       failure_code = 'superseded_by_human_decision',
-      updated_at = statement_timestamp()
+      updated_at = operation_time
     where research_contact_handoffs.candidate_id = candidate.id
       and status in ('requested', 'claimed');
   end if;
 
   return jsonb_build_object(
     'accepted', true,
+    'idempotent', false,
     'decisionId', decision_row.id,
     'candidateId', candidate.id,
     'decision', decision,
@@ -2593,13 +3518,20 @@ create or replace function public.claim_research_contact_handoff_v2(
 )
 returns jsonb
 language plpgsql
+security definer
 set search_path = ''
 as $$
 #variable_conflict use_variable
 declare
   handoff public.research_contact_handoffs;
+  candidate public.research_candidates;
   claim public.research_run_claims;
+  attempt public.research_contact_handoff_attempts;
+  current_attempt public.research_contact_handoff_attempts;
+  attempt_id uuid;
   token_hash text;
+  suppression_hash text;
+  operation_time timestamptz;
 begin
   if claim_request_id is null
     or worker_id is null
@@ -2607,6 +3539,7 @@ begin
     or worker_id !~ '^[A-Za-z0-9._-]+$'
     or claim_token is null
     or octet_length(claim_token) not between 32 and 256
+    or lease_seconds is null
     or lease_seconds not between 30 and 300
   then
     raise exception using
@@ -2619,7 +3552,18 @@ begin
   select stored_handoff.*
   into handoff
   from public.research_contact_handoffs stored_handoff
-  where stored_handoff.id = handoff_id
+  where stored_handoff.id = handoff_id;
+
+  if not found then
+    raise exception using
+      errcode = 'P0002',
+      message = 'research_handoff_not_found';
+  end if;
+
+  select stored_candidate.*
+  into candidate
+  from public.research_candidates stored_candidate
+  where stored_candidate.id = handoff.candidate_id
   for update;
 
   if not found then
@@ -2628,20 +3572,77 @@ begin
       message = 'research_handoff_not_found';
   end if;
 
-  if handoff.status = 'claimed'
-    and handoff.claim_request_id = claim_request_id
-    and handoff.worker_id = worker_id
-    and handoff.token_sha256 = token_hash
-    and handoff.lease_expires_at > statement_timestamp()
-  then
+  select stored_handoff.*
+  into handoff
+  from public.research_contact_handoffs stored_handoff
+  where stored_handoff.id = handoff_id
+  for update;
+
+  if not found or candidate.id is null then
+    raise exception using
+      errcode = 'P0002',
+      message = 'research_handoff_not_found';
+  end if;
+
+  select stored_attempt.*
+  into attempt
+  from public.research_contact_handoff_attempts stored_attempt
+  where stored_attempt.worker_id = worker_id
+    and stored_attempt.claim_request_id = claim_request_id
+  for update;
+
+  operation_time := clock_timestamp();
+  if found then
+    if attempt.handoff_id is distinct from handoff.id
+      or attempt.token_sha256 is distinct from token_hash
+    then
+      raise exception using
+        errcode = '28000',
+        message = 'research_handoff_claim_request_mismatch';
+    end if;
+    if attempt.status = 'claimed'
+      and attempt.lease_expires_at > operation_time
+    then
+      return jsonb_build_object(
+        'claimed', true,
+        'idempotent', true,
+        'handoffId', handoff.id,
+        'attemptId', attempt.id,
+        'contactPointId', handoff.contact_point_id,
+        'kind', handoff.kind,
+        'leaseExpiresAt', attempt.lease_expires_at
+      );
+    end if;
     return jsonb_build_object(
-      'claimed', true,
-      'idempotent', true,
-      'handoffId', handoff.id,
-      'contactPointId', handoff.contact_point_id,
-      'kind', handoff.kind,
-      'leaseExpiresAt', handoff.lease_expires_at
+      'claimed', false,
+      'reason', 'claim_request_already_ended'
     );
+  end if;
+
+  if handoff.current_attempt_id is not null then
+    select stored_attempt.*
+    into current_attempt
+    from public.research_contact_handoff_attempts stored_attempt
+    where stored_attempt.id = handoff.current_attempt_id
+      and stored_attempt.handoff_id = handoff.id
+    for update;
+
+    if current_attempt.status = 'claimed'
+      and current_attempt.lease_expires_at <= operation_time
+    then
+      update public.research_contact_handoff_attempts
+      set
+        status = 'expired',
+        ended_at = operation_time,
+        end_code = 'lease_expired'
+      where id = current_attempt.id;
+      handoff.status := 'requested';
+    elsif current_attempt.status = 'claimed' then
+      return jsonb_build_object(
+        'claimed', false,
+        'reason', 'handoff_not_available'
+      );
+    end if;
   end if;
 
   select stored_claim.*
@@ -2649,24 +3650,23 @@ begin
   from public.research_candidate_revisions revision
   join public.research_run_claims stored_claim
     on stored_claim.id = revision.claim_id
-  join public.research_candidates candidate
-    on candidate.id = revision.candidate_id
   where revision.id = handoff.revision_id
     and candidate.current_revision_id = revision.id
     and candidate.current_decision_id = handoff.decision_id
     and candidate.review_status = 'approved'
     and stored_claim.status = 'completed';
 
+  suppression_hash := private.locked_research_suppression_hash_v2();
+  operation_time := clock_timestamp();
   if not found
-    or claim.input_expires_at <= statement_timestamp()
-    or claim.suppression_set_sha256 <>
-      private.current_research_suppression_hash_v2()
+    or claim.input_expires_at <= operation_time
+    or claim.suppression_set_sha256 is distinct from suppression_hash
   then
     update public.research_contact_handoffs
     set
       status = 'blocked',
       failure_code = 'freshness_or_suppression_gate',
-      updated_at = statement_timestamp()
+      updated_at = operation_time
     where id = handoff.id;
 
     return jsonb_build_object(
@@ -2676,30 +3676,57 @@ begin
   end if;
 
   if handoff.status not in ('requested', 'claimed')
-    or (
-      handoff.status = 'claimed'
-      and handoff.lease_expires_at > statement_timestamp()
-    )
     or handoff.attempt_count >= 3
   then
+    if handoff.attempt_count >= 3 then
+      update public.research_contact_handoffs
+      set
+        status = 'expired',
+        failure_code = 'maximum_handoff_attempts_exhausted',
+        updated_at = operation_time
+      where id = handoff.id;
+    end if;
     return jsonb_build_object(
       'claimed', false,
       'reason', 'handoff_not_available'
     );
   end if;
 
+  insert into public.research_contact_handoff_attempts (
+    handoff_id,
+    attempt_no,
+    worker_id,
+    claim_request_id,
+    token_sha256,
+    lease_started_at,
+    lease_expires_at,
+    created_at
+  )
+  values (
+    handoff.id,
+    handoff.attempt_count + 1,
+    worker_id,
+    claim_request_id,
+    token_hash,
+    operation_time,
+    operation_time + make_interval(secs => lease_seconds),
+    operation_time
+  )
+  returning id into attempt_id;
+
   update public.research_contact_handoffs
   set
     status = 'claimed',
     worker_id = worker_id,
     claim_request_id = claim_request_id,
+    current_attempt_id = attempt_id,
     token_sha256 = token_hash,
     attempt_count = handoff.attempt_count + 1,
-    claimed_at = statement_timestamp(),
+    claimed_at = operation_time,
     lease_expires_at =
-      statement_timestamp() + make_interval(secs => lease_seconds),
+      operation_time + make_interval(secs => lease_seconds),
     failure_code = null,
-    updated_at = statement_timestamp()
+    updated_at = operation_time
   where id = handoff.id
   returning * into handoff;
 
@@ -2707,6 +3734,7 @@ begin
     'claimed', true,
     'idempotent', false,
     'handoffId', handoff.id,
+    'attemptId', attempt_id,
     'contactPointId', handoff.contact_point_id,
     'kind', handoff.kind,
     'leaseExpiresAt', handoff.lease_expires_at
@@ -2716,22 +3744,32 @@ $$;
 
 create or replace function public.submit_research_contact_handoff_v2(
   handoff_id uuid,
+  submission_request_id uuid,
   claim_token text,
   contact_value text,
   commitment_salt text
 )
 returns jsonb
 language plpgsql
+security definer
 set search_path = ''
 as $$
 #variable_conflict use_variable
 declare
   handoff public.research_contact_handoffs;
+  candidate public.research_candidates;
   claim public.research_run_claims;
+  attempt public.research_contact_handoff_attempts;
+  stored_value private.research_contact_point_values;
   normalized_value text;
   calculated_commitment text;
+  token_hash text;
+  request_hash text;
+  suppression_hash text;
+  operation_time timestamptz;
 begin
-  if claim_token is null
+  if submission_request_id is null
+    or claim_token is null
     or octet_length(claim_token) not between 32 and 256
     or contact_value is null
     or commitment_salt is null
@@ -2742,17 +3780,93 @@ begin
       message = 'research_handoff_submission_invalid';
   end if;
 
+  token_hash := private.research_sha256_v2(claim_token);
+  normalized_value := lower(trim(contact_value));
+  if length(normalized_value) not between 3 and 320
+    or normalized_value !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
+  then
+    raise exception using
+      errcode = '22023',
+      message = 'research_handoff_email_invalid';
+  end if;
+
+  request_hash := private.research_sha256_v2(
+    jsonb_build_object(
+      'handoffId', handoff_id,
+      'contactValue', normalized_value,
+      'commitmentSalt', commitment_salt
+    )::text
+  );
+
+  select stored_handoff.*
+  into handoff
+  from public.research_contact_handoffs stored_handoff
+  where stored_handoff.id = handoff_id;
+
+  if not found then
+    raise exception using
+      errcode = '28000',
+      message = 'research_handoff_claim_not_active';
+  end if;
+
+  select stored_candidate.*
+  into candidate
+  from public.research_candidates stored_candidate
+  where stored_candidate.id = handoff.candidate_id
+  for update;
+
+  if not found then
+    raise exception using
+      errcode = 'P0002',
+      message = 'research_handoff_not_found';
+  end if;
+
   select stored_handoff.*
   into handoff
   from public.research_contact_handoffs stored_handoff
   where stored_handoff.id = handoff_id
-    and stored_handoff.status = 'claimed'
-    and stored_handoff.token_sha256 =
-      private.research_sha256_v2(claim_token)
-    and stored_handoff.lease_expires_at > statement_timestamp()
   for update;
 
-  if not found then
+  select stored_point.*
+  into stored_value
+  from private.research_contact_point_values stored_point
+  where stored_point.handoff_id = handoff.id;
+
+  if found then
+    if handoff.token_sha256 is distinct from token_hash
+      or stored_value.submission_request_id is distinct from
+        submission_request_id
+      or stored_value.request_sha256 is distinct from request_hash
+    then
+      raise exception using
+        errcode = '23505',
+        message = 'research_handoff_submission_conflict';
+    end if;
+    return jsonb_build_object(
+      'accepted', true,
+      'idempotent', true,
+      'handoffId', handoff.id,
+      'status', 'verified',
+      'crmWritebackAuthorized', false,
+      'outreachAuthorized', false
+    );
+  end if;
+
+  operation_time := clock_timestamp();
+  select stored_attempt.*
+  into attempt
+  from public.research_contact_handoff_attempts stored_attempt
+  where stored_attempt.id = handoff.current_attempt_id
+    and stored_attempt.handoff_id = handoff.id
+    and stored_attempt.token_sha256 = token_hash
+  for update;
+
+  operation_time := clock_timestamp();
+  if not found
+    or handoff.status <> 'claimed'
+    or attempt.status <> 'claimed'
+    or attempt.lease_expires_at <= operation_time
+  then
     raise exception using
       errcode = '28000',
       message = 'research_handoff_claim_not_active';
@@ -2764,17 +3878,22 @@ begin
       message = 'research_handoff_kind_not_supported';
   end if;
 
-  normalized_value := lower(trim(contact_value));
-  if length(normalized_value) not between 3 and 320
-    or normalized_value !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
+  if lower(split_part(normalized_value, '@', 2)) is distinct from
+    handoff.expected_domain
   then
     raise exception using
       errcode = '22023',
-      message = 'research_handoff_email_invalid';
+      message = 'research_handoff_email_domain_mismatch';
   end if;
 
   calculated_commitment := private.research_sha256_v2(
-    commitment_salt || E'\x1f' || normalized_value
+    jsonb_build_object(
+      'salt', commitment_salt,
+      'contactValue', normalized_value,
+      'runId', candidate.run_id,
+      'externalCandidateId', candidate.external_candidate_id,
+      'contactPointId', handoff.contact_point_id
+    )::text
   );
   if calculated_commitment <> handoff.commitment_sha256 then
     raise exception using
@@ -2787,18 +3906,17 @@ begin
   from public.research_candidate_revisions revision
   join public.research_run_claims stored_claim
     on stored_claim.id = revision.claim_id
-  join public.research_candidates candidate
-    on candidate.id = revision.candidate_id
   where revision.id = handoff.revision_id
     and candidate.current_revision_id = revision.id
     and candidate.current_decision_id = handoff.decision_id
     and candidate.review_status = 'approved'
     and stored_claim.status = 'completed';
 
+  suppression_hash := private.locked_research_suppression_hash_v2();
+  operation_time := clock_timestamp();
   if not found
-    or claim.input_expires_at <= statement_timestamp()
-    or claim.suppression_set_sha256 <>
-      private.current_research_suppression_hash_v2()
+    or claim.input_expires_at <= operation_time
+    or claim.suppression_set_sha256 is distinct from suppression_hash
     or exists (
       select 1
       from public.outreach_suppressions suppression
@@ -2812,27 +3930,39 @@ begin
 
   insert into private.research_contact_point_values (
     handoff_id,
+    submission_request_id,
+    request_sha256,
     kind,
     contact_value,
     commitment_sha256
   )
   values (
     handoff.id,
+    submission_request_id,
+    request_hash,
     handoff.kind,
     normalized_value,
     calculated_commitment
   );
 
+  update public.research_contact_handoff_attempts
+  set
+    status = 'verified',
+    ended_at = operation_time,
+    end_code = 'contact_commitment_verified'
+  where id = attempt.id;
+
   update public.research_contact_handoffs
   set
     status = 'verified',
-    verified_at = statement_timestamp(),
+    verified_at = operation_time,
     failure_code = null,
-    updated_at = statement_timestamp()
+    updated_at = operation_time
   where id = handoff.id;
 
   return jsonb_build_object(
     'accepted', true,
+    'idempotent', false,
     'handoffId', handoff.id,
     'status', 'verified',
     'crmWritebackAuthorized', false,
@@ -2849,6 +3979,7 @@ alter table public.research_completion_candidate_revisions
   enable row level security;
 alter table public.research_candidate_decisions enable row level security;
 alter table public.research_contact_handoffs enable row level security;
+alter table public.research_contact_handoff_attempts enable row level security;
 alter table private.research_contact_point_values enable row level security;
 
 revoke all on public.research_run_claims
@@ -2864,6 +3995,8 @@ revoke all on public.research_completion_candidate_revisions
 revoke all on public.research_candidate_decisions
   from public, anon, authenticated;
 revoke all on public.research_contact_handoffs
+  from public, anon, authenticated;
+revoke all on public.research_contact_handoff_attempts
   from public, anon, authenticated;
 revoke all on private.research_contact_point_values
   from public, anon, authenticated;
@@ -2913,41 +4046,28 @@ using (
     like '%@gsdecorating.com'
 );
 
-grant usage on schema private to service_role;
-grant execute on function private.research_sha256_v2(text)
-  to service_role;
-grant execute on function private.research_sources_are_valid_v2(text[])
-  to service_role;
-grant execute on function private.research_contact_commitments_are_valid_v2(
-  jsonb
-) to service_role;
-grant execute on function private.normalize_research_contact_commitments_v2(
-  jsonb
-) to service_role;
-grant execute on function private.current_research_suppression_hash_v2()
-  to service_role;
-grant execute on function private.require_active_research_claim_v2(uuid, text)
-  to service_role;
-
-grant select, insert, update on public.research_run_claims
-  to service_role;
-grant select, insert on public.research_candidate_revisions
-  to service_role;
-grant select, insert on public.research_evidence_revisions
-  to service_role;
-grant select, insert on public.research_run_completions
-  to service_role;
-grant select, insert on public.research_completion_candidate_revisions
-  to service_role;
-grant select, insert on public.research_candidate_decisions
-  to service_role;
-grant select, insert, update on public.research_contact_handoffs
-  to service_role;
-grant select, insert on private.research_contact_point_values
-  to service_role;
+revoke all on schema private from service_role;
+revoke all on public.research_run_claims from service_role;
+revoke all on public.research_candidate_revisions from service_role;
+revoke all on public.research_evidence_revisions from service_role;
+revoke all on public.research_run_completions from service_role;
+revoke all on public.research_completion_candidate_revisions
+  from service_role;
+revoke all on public.research_candidate_decisions from service_role;
+revoke all on public.research_contact_handoffs from service_role;
+revoke all on public.research_contact_handoff_attempts from service_role;
+revoke all on private.research_contact_point_values from service_role;
 
 -- PostgreSQL grants PUBLIC execute on new functions by default. Remove that
 -- before granting only the server-side role.
+revoke all on function public.create_research_run_v2(
+  uuid,
+  text,
+  jsonb,
+  text[],
+  uuid,
+  smallint
+) from public, anon, authenticated;
 revoke all on function public.reclaim_expired_research_claims_v2(integer)
   from public, anon, authenticated;
 revoke all on function public.claim_research_run_v2(
@@ -2980,6 +4100,15 @@ revoke all on function public.transition_research_task_v2(
   text,
   text
 ) from public, anon, authenticated;
+revoke all on function public.append_research_event_v2(
+  uuid,
+  text,
+  uuid,
+  text,
+  text,
+  text,
+  uuid
+) from public, anon, authenticated;
 revoke all on function public.append_research_candidate_revision_v2(
   uuid,
   text,
@@ -2996,6 +4125,7 @@ revoke all on function public.complete_research_run_v2(
 revoke all on function public.decide_research_candidate_v2(
   uuid,
   uuid,
+  uuid,
   text,
   text,
   text,
@@ -3010,11 +4140,20 @@ revoke all on function public.claim_research_contact_handoff_v2(
 ) from public, anon, authenticated;
 revoke all on function public.submit_research_contact_handoff_v2(
   uuid,
+  uuid,
   text,
   text,
   text
 ) from public, anon, authenticated;
 
+grant execute on function public.create_research_run_v2(
+  uuid,
+  text,
+  jsonb,
+  text[],
+  uuid,
+  smallint
+) to service_role;
 grant execute on function public.reclaim_expired_research_claims_v2(integer)
   to service_role;
 grant execute on function public.claim_research_run_v2(
@@ -3047,6 +4186,15 @@ grant execute on function public.transition_research_task_v2(
   text,
   text
 ) to service_role;
+grant execute on function public.append_research_event_v2(
+  uuid,
+  text,
+  uuid,
+  text,
+  text,
+  text,
+  uuid
+) to service_role;
 grant execute on function public.append_research_candidate_revision_v2(
   uuid,
   text,
@@ -3063,6 +4211,7 @@ grant execute on function public.complete_research_run_v2(
 grant execute on function public.decide_research_candidate_v2(
   uuid,
   uuid,
+  uuid,
   text,
   text,
   text,
@@ -3076,6 +4225,7 @@ grant execute on function public.claim_research_contact_handoff_v2(
   integer
 ) to service_role;
 grant execute on function public.submit_research_contact_handoff_v2(
+  uuid,
   uuid,
   text,
   text,
