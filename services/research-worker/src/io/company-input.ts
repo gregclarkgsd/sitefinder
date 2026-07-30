@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { canonicalDomain, stableId } from "../lib/normalize.js";
+import {
+  canonicalDomain,
+  normalizeHostname,
+  stableId,
+} from "../lib/normalize.js";
 import type { CompanySeed } from "../types.js";
 import { parseCapturedJson, type ImmutableInput } from "./immutable-input.js";
 
@@ -8,6 +12,7 @@ const companySeedSchema = z.object({
   name: z.string().min(1),
   domain: z.string().min(1),
   websiteUrl: z.url().optional(),
+  apolloSearchDomain: z.string().trim().min(1).max(253).optional(),
   source: z.enum(["attio", "pipedrive", "file"]).default("file"),
   sourceRecordId: z.string().optional(),
   sourceIds: z
@@ -50,6 +55,14 @@ export function parseCapturedCompanySeeds(
         `Website domain does not match company domain at input row ${index + 1}`,
       );
     }
+    const apolloSearchDomain = parsed.apolloSearchDomain
+      ? normalizeHostname(parsed.apolloSearchDomain)
+      : undefined;
+    if (parsed.apolloSearchDomain && !apolloSearchDomain) {
+      throw new Error(
+        `Invalid Apollo search domain at input row ${index + 1}`,
+      );
+    }
     const sourceIds = parsed.sourceIds
       ? {
           ...(parsed.sourceIds.attio
@@ -75,6 +88,7 @@ export function parseCapturedCompanySeeds(
       name: parsed.name.trim(),
       domain,
       websiteUrl,
+      ...(apolloSearchDomain ? { apolloSearchDomain } : {}),
       source: parsed.source,
       ...(parsed.sourceRecordId
         ? { sourceRecordId: parsed.sourceRecordId }

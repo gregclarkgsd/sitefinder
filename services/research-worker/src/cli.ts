@@ -40,6 +40,7 @@ import {
 import { loadVerifiedCleanupApproval } from "./policy/cleanup-approval-manifest.js";
 import { selectReviewedPilotCompanies } from "./policy/reviewed-pilot-manifest.js";
 import { CompaniesHouseReader } from "./public-data/companies-house.js";
+import { ApolloPeopleReader } from "./public-data/apollo.js";
 import { reconcilePeople } from "./reconcile.js";
 import {
   createCompanyResearchPlan,
@@ -737,6 +738,16 @@ async function enrich(args: Arguments): Promise<void> {
         ),
       )
     : undefined;
+  const apolloMaxPeople = integerFlag(args, "apollo-max-people", 10, {
+    min: 1,
+    max: 25,
+  });
+  const apollo = enabled(args, "with-apollo")
+    ? new ApolloPeopleReader(
+        requireSecret(config.apolloApiKey, "APOLLO_API_KEY"),
+        { maxPeople: apolloMaxPeople },
+      )
+    : undefined;
   const maxPages = integerFlag(args, "max-pages", config.crawler.maxPages, {
     min: 1,
     max: 50,
@@ -785,6 +796,8 @@ async function enrich(args: Arguments): Promise<void> {
           concurrency,
           procurementDays,
           companiesHouse: Boolean(companiesHouse),
+          apollo: Boolean(apollo),
+          ...(apollo ? { apolloMaxPeople } : {}),
           companyInputSha256: companyInputHash,
           cleanupDecisionsSha256: cleanupInputHash,
           cleanupManifestSha256: cleanupManifestHash,
@@ -813,6 +826,7 @@ async function enrich(args: Arguments): Promise<void> {
         },
         concurrency,
         ...(companiesHouse ? { companiesHouse } : {}),
+        ...(apollo ? { apollo } : {}),
         cleanupDecisions,
         attioPeople,
         pipedrivePeople,

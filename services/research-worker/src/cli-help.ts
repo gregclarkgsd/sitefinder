@@ -5,7 +5,7 @@ Commands:
   snapshot-pipedrive   Save private Pipedrive organisation/person snapshots
   reconcile            Compare private snapshots without writing to either CRM
   universe             Compile a safe multi-source company research list
-  enrich               Crawl official company sites and optional public sources
+  enrich               Crawl official sites and optional public/licensed sources
 
 Examples:
   npm run snapshot:attio -- --output snapshots/attio
@@ -40,4 +40,6 @@ non-iCloud directory outside every Git repository. --output is always a
 relative child directory beneath that boundary.
 All snapshot and policy inputs must also resolve beneath that boundary.
 The optional progress feed updates SiteFinder's Research Agent control room.
+Apollo is opt-in with --with-apollo and requires APOLLO_API_KEY. Its licensed
+business emails remain review-only until independently verified publicly.
 CRM write flags are intentionally unsupported.`;

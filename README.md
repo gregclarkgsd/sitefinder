@@ -158,11 +158,16 @@ completion filter includes a dedicated 3–9 month decorating window.
 ## Research Agent control room
 
 The **Research Agent** tab is an operator-facing control room for the isolated
-worker in `services/research-worker`. The control room remains an explicitly
-labelled preview until an operator starts that separate read-only process: it
-demonstrates the company queue, live page activity, Pause/Resume, orderly stop
-requests, evidence inspection and human candidate decisions without starting a
-crawler or writing to Attio from the browser.
+worker in `services/research-worker`. **New research run** lets an authenticated
+operator select one or more contractors already present in SiteFinder, confirm
+the official domain, choose approved sources and queue the reviewed request.
+The browser never receives provider credentials and never starts a crawler
+itself: a queued request waits for the approved local worker.
+
+Without a signed-in cloud connection the page remains an explicitly labelled
+preview. It demonstrates the company queue, live page activity, Pause/Resume,
+orderly stop requests, evidence inspection and human candidate decisions
+without writing to Attio.
 
 The end-to-end company, CRM, research and Woodpecker relationship is mapped in
 [`RESEARCH-AGENT-WORKFLOW.md`](./RESEARCH-AGENT-WORKFLOW.md).
@@ -172,6 +177,13 @@ contractor/client IDs and reviewed files. Cleanup decisions are mandatory:
 quarantined or excluded identities are withheld before they can become normal
 review candidates. Raw CRM inputs and outputs are rejected unless they live in
 an explicitly configured local directory outside Git and iCloud.
+
+Official company websites remain the evidence source. When explicitly enabled,
+Apollo can add licensed business contact data for the confirmed company
+hostname. Licensed email results are labelled separately and remain in human
+review; they do not satisfy the stricter public-email approval gate. Companies
+House and procurement are represented as reviewed source choices for the queue
+but remain inactive until their worker adapters are implemented.
 
 The production connection must preserve the same boundary:
 
@@ -194,6 +206,10 @@ an exact public work-email result that is either Pipedrive-only or absent from
 both CRM snapshots, plus at least 65% evidence confidence. Unknown, conflicting,
 Attio-existing and no-email states fail closed. If a later worker retry makes an
 approved comparison unsafe, the database returns it to pending review.
+
+Migration `20260730103000_add_licensed_research_email_status.sql` adds the
+separate `licensed_business_email_found` evidence status without weakening that
+public-email approval rule.
 
 Research-candidate approval is not connected to the existing project Outreach
 queue. The approved-lead handoff described below is a separate,

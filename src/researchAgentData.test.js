@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildResearchRun,
+  createResearchRun,
   updateResearchCandidateReview,
   updateResearchRunStatus,
 } from './researchAgentData.js';
@@ -97,6 +98,40 @@ test('uses authenticated server routes for runner controls and candidate decisio
       body: {decision: 'approved'},
     },
   ]);
+});
+
+test('queues a reviewed research request through the authenticated server route', async () => {
+  const input = {
+    name: 'Two-company pilot',
+    companies: [{
+      companyId: 'sitefinder_contractor:123',
+      companyName: 'Example Construction',
+      domain: 'example.com',
+    }],
+    sources: {
+      website: true,
+      apollo: true,
+      companiesHouse: false,
+      procurement: false,
+    },
+    apolloMaxPeople: 5,
+    procurementDays: 0,
+  };
+  const request = async (path, options) => {
+    assert.equal(path, '/api/research/runs');
+    assert.equal(options.method, 'POST');
+    assert.deepEqual(JSON.parse(options.body), input);
+    return new Response(JSON.stringify({
+      accepted: true,
+      runId: 'run-2',
+      status: 'queued',
+    }), {status: 201});
+  };
+
+  assert.deepEqual(
+    await createResearchRun(request, input),
+    {accepted: true, runId: 'run-2', status: 'queued'},
+  );
 });
 
 test('surfaces a safe server action error', async () => {

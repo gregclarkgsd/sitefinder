@@ -106,6 +106,10 @@ export function updateResearchRunStatus(request, runId, status) {
   );
 }
 
+export function createResearchRun(request, input) {
+  return sendResearchAction(request, '/api/research/runs', input);
+}
+
 export function updateResearchCandidateReview(request, candidateId, decision) {
   return sendResearchAction(
     request,

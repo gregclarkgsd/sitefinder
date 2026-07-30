@@ -8,6 +8,7 @@ test("allows unused optional credentials to be blank", () => {
     ATTIO_API_TOKEN: "attio-token",
     PIPEDRIVE_API_TOKEN: "",
     COMPANIES_HOUSE_API_KEY: "   ",
+    APOLLO_API_KEY: "",
   });
 
   assert.equal(
@@ -17,6 +18,7 @@ test("allows unused optional credentials to be blank", () => {
   assert.equal(config.attioToken, "attio-token");
   assert.equal(config.pipedriveToken, undefined);
   assert.equal(config.companiesHouseApiKey, undefined);
+  assert.equal(config.apolloApiKey, undefined);
 });
 
 test("requires an absolute private-data directory", () => {

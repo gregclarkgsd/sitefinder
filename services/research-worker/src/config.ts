@@ -39,6 +39,7 @@ const environmentSchema = z.object({
       }
     }),
   COMPANIES_HOUSE_API_KEY: optionalSecret,
+  APOLLO_API_KEY: optionalSecret,
   RESEARCH_AGENT_INGEST_URL: z.url().optional(),
   RESEARCH_AGENT_INGEST_TOKEN: optionalSecret,
   CRAWLER_CONTACT_URL: z.url().default("https://www.gsdecorating.com/"),
@@ -54,6 +55,7 @@ export interface AppConfig {
   pipedriveToken?: string;
   pipedriveApiDomain: string;
   companiesHouseApiKey?: string;
+  apolloApiKey?: string;
   researchAgentIngestUrl?: string;
   researchAgentIngestToken?: string;
   crawler: {
@@ -79,6 +81,9 @@ export function loadConfig(
     pipedriveApiDomain: parsed.PIPEDRIVE_API_DOMAIN,
     ...(parsed.COMPANIES_HOUSE_API_KEY
       ? { companiesHouseApiKey: parsed.COMPANIES_HOUSE_API_KEY }
+      : {}),
+    ...(parsed.APOLLO_API_KEY
+      ? { apolloApiKey: parsed.APOLLO_API_KEY }
       : {}),
     ...(parsed.RESEARCH_AGENT_INGEST_URL
       ? { researchAgentIngestUrl: parsed.RESEARCH_AGENT_INGEST_URL }

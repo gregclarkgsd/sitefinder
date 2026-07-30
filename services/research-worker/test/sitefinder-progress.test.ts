@@ -29,9 +29,14 @@ function fakeResult(): EnrichedCompany {
         roleCategory: "commercial",
         rolePriority: 90,
         employmentStatus: "current",
-        emails: [],
+        emails: [
+          {
+            value: "person@example.com",
+            status: "licensed_provider",
+          },
+        ],
         phones: [],
-        profileUrls: [],
+        profileUrls: ["https://www.linkedin.com/in/example-person"],
         evidenceIds: ["evidence-1"],
         confidence: 0.9,
       },
@@ -50,8 +55,8 @@ function fakeResult(): EnrichedCompany {
       {
         id: "evidence-1",
         companyId: company.id,
-        sourceKind: "company_website",
-        sourceUrl: "https://example.com/team",
+        sourceKind: "apollo",
+        sourceUrl: "https://app.apollo.io/#/people/apollo-person-1",
         capturedAt: "2026-07-28T09:00:00.000Z",
         field: "person",
         value: "Example Person",
@@ -119,6 +124,11 @@ test("publishes bounded progress without placing the credential in JSON", async 
   assert.equal(serialized.includes("private-test-token"), false);
   assert.equal(serialized.includes("person@example.com"), false);
   assert.equal(serialized.includes("07123 456789"), false);
+  assert.equal(serialized.includes("licensed_business_email_found"), true);
+  assert.equal(
+    serialized.includes("https://www.linkedin.com/in/example-person"),
+    true,
+  );
   assert.equal(serialized.includes("missing_from_both"), true);
   assert.equal(serialized.includes("not_checked"), false);
   assert.ok(authHeaders.every(value => value === "Bearer private-test-token"));

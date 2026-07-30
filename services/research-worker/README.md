@@ -223,6 +223,32 @@ To include Companies House, set `COMPANIES_HOUSE_API_KEY` and add:
 --with-companies-house
 ```
 
+To add a bounded Apollo people search, supply `APOLLO_API_KEY` through the
+local process environment or a local secret manager (not this iCloud-backed
+workspace) and add:
+
+```bash
+--with-apollo --apollo-max-people 10
+```
+
+Apollo is opt-in because person enrichment can consume Apollo credits. The
+worker searches the exact company domain for target construction roles, asks
+only for verified business emails, and explicitly disables personal-email,
+phone, and waterfall enrichment. Results are labelled
+`licensed_business_email_found`; they can be reviewed and compared with the
+CRM snapshots but cannot be approved until the email is independently verified
+on a public source.
+
+If Apollo indexes a business under a different current official hostname, add
+an `apolloSearchDomain` to that reviewed company input row. The exact hostname
+is used for search, while an enrichment result is accepted only when Apollo's
+organisation domain has the same registrable parent. For example, BAM's
+reviewed input can retain `domain: "bam.co.uk"` and specify
+`apolloSearchDomain: "ukandireland.bam.com"`; Apollo may then return the
+verified parent organisation and email domain `bam.com`. Because the reviewed
+pilot manifest is bound to the exact company-input hash, this alias is an
+explicit reviewed input rather than an automatic fuzzy match.
+
 To inspect recent public procurement notices, add a bounded window:
 
 ```bash

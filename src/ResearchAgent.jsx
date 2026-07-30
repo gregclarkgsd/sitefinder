@@ -10,8 +10,9 @@ import {
   Globe2,
   Pause,
   Play,
+  Plus,
   RefreshCw,
-  RotateCcw,
+  Search,
   SearchCheck,
   ShieldCheck,
   X,
@@ -30,10 +31,15 @@ import {
 } from './researchAgentState';
 import {
   loadLatestResearchRun,
+  createResearchRun,
   subscribeToResearchRun,
   updateResearchCandidateReview,
   updateResearchRunStatus,
 } from './researchAgentData';
+import {
+  buildResearchCompanyOptions,
+  createQueuedPreviewRun,
+} from './researchRunPlan';
 import {supabase} from './supabase';
 import {apiFetch} from './api';
 import './research-agent.css';
@@ -60,6 +66,170 @@ const emptyTask = {
   currentStep: 0,
 };
 
+const domainPattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
+
+function defaultRunName() {
+  return `Contractor research · ${new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+  }).format(new Date())}`;
+}
+
+function ResearchRunLauncher({
+  companies,
+  onClose,
+  onQueue,
+  working,
+}) {
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState([]);
+  const [details, setDetails] = useState({});
+  const [name, setName] = useState(defaultRunName);
+  const [sources, setSources] = useState({
+    website: true,
+    apollo: true,
+    companiesHouse: false,
+    procurement: false,
+  });
+  const [apolloMaxPeople, setApolloMaxPeople] = useState(5);
+  const [procurementDays, setProcurementDays] = useState(30);
+  const [error, setError] = useState('');
+  const visibleCompanies = companies
+    .filter(company => company.name.toLowerCase().includes(query.trim().toLowerCase()))
+    .slice(0, 80);
+
+  const toggleCompany = company => {
+    setSelected(current => current.includes(company.id)
+      ? current.filter(id => id !== company.id)
+      : [...current, company.id]);
+    setDetails(current => current[company.id]
+      ? current
+      : {
+          ...current,
+          [company.id]: {
+            domain: company.domain,
+            apolloSearchDomain: company.apolloSearchDomain,
+          },
+        });
+  };
+  const updateCompany = (companyId, field, value) => {
+    setDetails(current => ({
+      ...current,
+      [companyId]: {...current[companyId], [field]: value.toLowerCase().trim()},
+    }));
+  };
+  const submit = async event => {
+    event.preventDefault();
+    const chosen = selected
+      .map(id => companies.find(company => company.id === id))
+      .filter(Boolean);
+    if (chosen.length === 0) {
+      setError('Choose at least one company.');
+      return;
+    }
+    const companyRows = chosen.map(company => ({
+      companyId: company.id,
+      companyName: company.name,
+      domain: details[company.id]?.domain || '',
+      ...(sources.apollo && details[company.id]?.apolloSearchDomain
+        ? {apolloSearchDomain: details[company.id].apolloSearchDomain}
+        : {}),
+    }));
+    if (companyRows.some(company => !domainPattern.test(company.domain))) {
+      setError('Enter each official company domain without https:// or a page path.');
+      return;
+    }
+    if (
+      companyRows.some(
+        company =>
+          company.apolloSearchDomain &&
+          !domainPattern.test(company.apolloSearchDomain),
+      )
+    ) {
+      setError('Apollo search hostnames must be domains without paths.');
+      return;
+    }
+    setError('');
+    try {
+      await onQueue({
+        name: name.trim(),
+        companies: companyRows,
+        sources,
+        apolloMaxPeople: Number(apolloMaxPeople),
+        procurementDays: sources.procurement ? Number(procurementDays) : 0,
+      });
+    } catch (queueError) {
+      setError(
+        queueError instanceof Error
+          ? queueError.message
+          : 'The research request could not be queued.',
+      );
+    }
+  };
+
+  return <div className="research-launcher-backdrop" role="presentation">
+    <section className="research-launcher" role="dialog" aria-modal="true" aria-labelledby="research-launcher-title">
+      <header>
+        <div><span>New run</span><h2 id="research-launcher-title">Choose companies to research</h2><p>Create a reviewed queue for the local, read-only worker.</p></div>
+        <button type="button" onClick={onClose} aria-label="Close research launcher"><X size={18}/></button>
+      </header>
+      <form onSubmit={submit}>
+        <label className="research-launcher-name">
+          <span>Run name</span>
+          <input value={name} onChange={event => setName(event.target.value)} maxLength="120" required/>
+        </label>
+        <div className="research-launcher-grid">
+          <section className="research-company-picker">
+            <div className="research-launcher-section-title"><div><span>1</span><b>Select contractors</b></div><small>{selected.length} selected</small></div>
+            <label className="research-company-search"><Search size={15}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search contractors…" aria-label="Search contractors"/></label>
+            <div className="research-company-options">
+              {visibleCompanies.length === 0 && <p>No contractors match this search.</p>}
+              {visibleCompanies.map(company => <label key={company.id}>
+                <input type="checkbox" checked={selected.includes(company.id)} onChange={() => toggleCompany(company)}/>
+                <span>
+                  <b>{company.name}</b>
+                  <small>{company.projectCount} active project{company.projectCount === 1 ? '' : 's'}{company.projectNames.length ? ` · ${company.projectNames.join(' · ')}` : ''}</small>
+                </span>
+              </label>)}
+            </div>
+          </section>
+          <section className="research-selected-companies">
+            <div className="research-launcher-section-title"><div><span>2</span><b>Confirm company domains</b></div><small>Required</small></div>
+            {selected.length === 0 && <div className="research-launcher-empty">Selected companies will appear here.</div>}
+            {selected.map(id => {
+              const company = companies.find(item => item.id === id);
+              if (!company) return null;
+              return <article key={id}>
+                <div><b>{company.name}</b><button type="button" onClick={() => toggleCompany(company)} aria-label={`Remove ${company.name}`}><X size={13}/></button></div>
+                <label><span>Official website domain</span><input value={details[id]?.domain || ''} onChange={event => updateCompany(id, 'domain', event.target.value)} placeholder="company.co.uk" required/></label>
+                {sources.apollo && <label><span>Apollo search hostname <small>optional</small></span><input value={details[id]?.apolloSearchDomain || ''} onChange={event => updateCompany(id, 'apolloSearchDomain', event.target.value)} placeholder="people.company.com"/></label>}
+              </article>;
+            })}
+          </section>
+        </div>
+        <section className="research-source-settings">
+          <div className="research-launcher-section-title"><div><span>3</span><b>Choose research sources</b></div><small>Website always on</small></div>
+          <div className="research-source-options">
+            <label><input type="checkbox" checked disabled/><span><b>Official website</b><small>Public pages and PDFs</small></span></label>
+            <label><input type="checkbox" checked={sources.apollo} onChange={event => setSources(current => ({...current, apollo: event.target.checked}))}/><span><b>Apollo</b><small>Licensed business data</small></span></label>
+            <label><input type="checkbox" checked={sources.companiesHouse} onChange={event => setSources(current => ({...current, companiesHouse: event.target.checked}))}/><span><b>Companies House</b><small>Legal company facts</small></span></label>
+            <label><input type="checkbox" checked={sources.procurement} onChange={event => setSources(current => ({...current, procurement: event.target.checked}))}/><span><b>Procurement</b><small>Recent public notices</small></span></label>
+          </div>
+          <div className="research-run-limits">
+            <label><span>Apollo people per company</span><input type="number" min="1" max="25" value={apolloMaxPeople} onChange={event => setApolloMaxPeople(event.target.value)}/></label>
+            {sources.procurement && <label><span>Procurement lookback days</span><input type="number" min="1" max="365" value={procurementDays} onChange={event => setProcurementDays(event.target.value)}/></label>}
+          </div>
+        </section>
+        {error && <p className="research-launcher-error" role="alert">{error}</p>}
+        <footer>
+          <p><ShieldCheck size={15}/> This queues a read-only request. The browser never receives the Apollo key and nothing is written to Attio.</p>
+          <div><button type="button" onClick={onClose}>Cancel</button><button type="submit" className="primary" disabled={working || selected.length === 0}><Play size={15}/> {working ? 'Queuing…' : selected.length ? `Queue ${selected.length} compan${selected.length === 1 ? 'y' : 'ies'}` : 'Queue research run'}</button></div>
+        </footer>
+      </form>
+    </section>
+  </div>;
+}
+
 function runStatusLabel(status) {
   return {
     running: 'Research running',
@@ -80,6 +250,7 @@ function formatTime(value) {
 function emailStatusLabel(value) {
   return {
     public_email_found: 'Public work email found',
+    licensed_business_email_found: 'Licensed business email found',
     not_publicly_found: 'No public work email found',
   }[value] || value || 'Not checked';
 }
@@ -116,7 +287,11 @@ function BrowserPreview({task, runStatus, events = [], preview = false}) {
       message,
       createdAt: Date.now() - (rows.length - index) * 7000,
     }));
-  const visibleEvents = liveEvents.length ? liveEvents : preview ? previewEvents : [];
+  const visibleEvents = liveEvents.length
+    ? liveEvents
+    : preview && runStatus !== 'queued'
+      ? previewEvents
+      : [];
   return <section className="research-pane research-live" aria-label="Live research activity">
     <div className="research-pane-heading">
       <div><span>Current task</span><h2>Live research view</h2></div>
@@ -209,7 +384,7 @@ function CandidateInspector({
       <div><dt>Company</dt><dd>{companyName}</dd></div>
       <div><dt>Source</dt><dd><a href={candidate.sourceUrl} target="_blank" rel="noreferrer">{candidate.sourceKind}<ExternalLink size={12}/></a></dd></div>
       <div><dt>CRM comparison</dt><dd>{researchCrmComparisonLabel(candidate.crmComparison)}</dd></div>
-      <div><dt>Public work email</dt><dd>{emailStatusLabel(candidate.emailStatus)}</dd></div>
+      <div><dt>Email evidence</dt><dd>{emailStatusLabel(candidate.emailStatus)}</dd></div>
       <div><dt>Evidence</dt><dd>{candidate.evidence}</dd></div>
       <div><dt>Confidence</dt><dd className="confidence"><i><em style={{width: `${candidate.confidence * 100}%`}}/></i><b>{Math.round(candidate.confidence * 100)}%</b></dd></div>
     </dl>
@@ -229,18 +404,24 @@ function CandidateInspector({
   </section>;
 }
 
-export function ResearchAgentPage({cloudEnabled = false, session = null}) {
+export function ResearchAgentPage({cloudEnabled = false, session = null, projects = []}) {
   const [run, setRun] = useState(createPreviewResearchRun);
   const [selectedTaskId, setSelectedTaskId] = useState(run.tasks[0].id);
   const [dataState, setDataState] = useState('preview');
   const [dataError, setDataError] = useState('');
   const [working, setWorking] = useState(false);
   const [selectedCandidateId, setSelectedCandidateId] = useState('');
+  const [launcherOpen, setLauncherOpen] = useState(false);
   const selectedTask = useMemo(() => run.tasks.find(task => task.id === selectedTaskId) || run.tasks[0] || emptyTask, [run.tasks, selectedTaskId]);
   const taskCandidates = useMemo(() => run.candidates.filter(item => item.taskId === selectedTask.id), [run.candidates, selectedTask.id]);
   const candidate = taskCandidates.find(item => item.id === selectedCandidateId) || taskCandidates[0] || null;
   const reviewCount = pendingReviewCount(run);
   const primaryControl = primaryRunControl(run.status);
+  const waitingForWorker = run.status === 'queued';
+  const companyOptions = useMemo(
+    () => buildResearchCompanyOptions(projects, run.tasks),
+    [projects, run.tasks],
+  );
 
   useEffect(() => {
     setSelectedCandidateId(current => taskCandidates.some(item => item.id === current)
@@ -338,25 +519,54 @@ export function ResearchAgentPage({cloudEnabled = false, session = null}) {
       setWorking(false);
     }
   };
+  const queueRun = async request => {
+    setWorking(true);
+    try {
+      if (cloudEnabled && session?.user?.id) {
+        const created = await createResearchRun(apiFetch, request);
+        const savedRun = await loadSavedRun();
+        if (!savedRun || savedRun.id !== created.runId) {
+          throw new Error('The queued run was saved but could not be reloaded.');
+        }
+      } else {
+        const queued = createQueuedPreviewRun(request);
+        setRun(queued);
+        setSelectedTaskId(queued.tasks[0]?.id || '');
+        setDataState('preview');
+      }
+      setDataError('');
+      setLauncherOpen(false);
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'The research request could not be queued.');
+      throw error;
+    } finally {
+      setWorking(false);
+    }
+  };
 
   return <div className="research-agent-page">
+    {launcherOpen && <ResearchRunLauncher companies={companyOptions} onClose={() => setLauncherOpen(false)} onQueue={queueRun} working={working}/>}
     <section className="research-command">
       <div className="research-run-title">
         <span className={`research-live-dot status-${run.status}`}/>
         <div>
           <div><strong>{runStatusLabel(run.status)} · {run.name}</strong><span className={`preview-label ${dataState === 'live' ? 'live' : ''}`}>{dataState === 'live' ? 'Live read-only' : 'Preview mode'}</span></div>
-          <p>Started {formatTime(run.startedAt)} · stops after {run.companyLimit} companies · no automatic Attio changes</p>
+          <p>Started {formatTime(run.startedAt)} · stops after {run.companyLimit} {run.companyLimit === 1 ? 'company' : 'companies'} · no automatic Attio changes</p>
         </div>
       </div>
       <div className="research-command-actions">
-        <button type="button" onClick={togglePause} disabled={working || !primaryControl}>
-          {primaryControl?.status === 'running' ? <Play size={15}/> : <Pause size={15}/>}
-          {primaryControl?.label || 'No run control'}
+        <button type="button" onClick={togglePause} disabled={working || waitingForWorker || !primaryControl}>
+          {waitingForWorker
+            ? <Bot size={15}/>
+            : primaryControl?.status === 'running'
+              ? <Play size={15}/>
+              : <Pause size={15}/>}
+          {waitingForWorker ? 'Waiting for worker' : primaryControl?.label || 'No run control'}
         </button>
-        <button type="button" onClick={stopAfterCurrent} disabled={working || run.stopAfterCurrent || run.status === 'stopping' || run.status === 'completed'}>
+        <button type="button" onClick={stopAfterCurrent} disabled={working || waitingForWorker || run.stopAfterCurrent || run.status === 'stopping' || run.status === 'completed'}>
           <CircleStop size={15}/> {run.stopAfterCurrent || run.status === 'stopping' ? 'Stop requested' : 'Stop after current company'}
         </button>
-        <button type="button" className="primary" onClick={reset} disabled={working}><RotateCcw size={15}/> {dataState === 'live' ? 'Refresh run' : 'New preview run'}</button>
+        <button type="button" className="primary" onClick={() => setLauncherOpen(true)} disabled={working || companyOptions.length === 0}><Plus size={15}/> New research run</button>
       </div>
     </section>
 
@@ -379,6 +589,6 @@ export function ResearchAgentPage({cloudEnabled = false, session = null}) {
         preview={dataState !== 'live'}
       />
     </div>
-    <div className={`research-preview-notice ${dataState === 'live' ? 'live' : ''}`}><Bot size={15}/><span>{dataState === 'live' ? 'Showing the latest saved read-only run. Task, event and candidate changes update automatically.' : 'This working page uses illustrative activity while the live research runner is connected. All controls are safely contained in preview mode.'}{dataError ? ` Live data note: ${dataError}` : ''}</span><button type="button" onClick={reset}><RefreshCw size={14}/> {dataState === 'live' ? 'Refresh' : 'Reset preview'}</button></div>
+    <div className={`research-preview-notice ${dataState === 'live' ? 'live' : ''}`}><Bot size={15}/><span>{run.status === 'queued' ? 'This run is queued and waiting for the approved local worker on this laptop.' : dataState === 'live' ? 'Showing the latest saved read-only run. Task, event and candidate changes update automatically.' : 'This working page uses illustrative activity while the live research runner is connected. All controls are safely contained in preview mode.'}{dataError ? ` Live data note: ${dataError}` : ''}</span><button type="button" onClick={reset}><RefreshCw size={14}/> {dataState === 'live' ? 'Refresh' : 'Reset preview'}</button></div>
   </div>;
 }

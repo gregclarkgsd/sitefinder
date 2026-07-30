@@ -46,6 +46,11 @@ flowchart LR
   reviewed pilot of up to 250 companies. It retains source evidence and
   determines whether each exact-email discovery is already in Attio, only in
   Pipedrive, absent from both, or conflicting.
+- **Apollo** is an optional licensed business-data source. An operator must
+  enable it for the run and confirm its search hostname. The API key remains in
+  the private local worker environment, never the SiteFinder browser. Apollo
+  email evidence is labelled as licensed and cannot pass the stricter
+  public-email approval gate.
 - **Woodpecker** remains the separate bulk-mail execution tool. Nothing in the
   research worker sends mail or automatically creates a Woodpecker audience.
 
@@ -69,6 +74,9 @@ flowchart LR
 11. Research candidates are not connected to the existing project Outreach
     queue. That separation remains intentional until the governed Attio
     writeback and bulk-audience design exists.
+12. SiteFinder queues reviewed company/source requests; only the approved local
+    worker consumes them. Companies House and procurement stay disabled at the
+    worker layer until dedicated adapters are implemented.
 
 ## Current handoff from the Attio cleanup task
 

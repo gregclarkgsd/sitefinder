@@ -450,7 +450,14 @@ export class SiteFinderProgressPublisher {
     );
     for (const contact of result.contacts) {
       const evidence = candidateEvidence(result, contact);
+      const licensedProfileUrl =
+        evidence?.sourceKind === "apollo"
+          ? contact.profileUrls
+              .map((value) => httpsSource(value))
+              .find((value) => value !== undefined)
+          : undefined;
       const sourceUrl =
+        licensedProfileUrl ??
         httpsSource(evidence?.sourceUrl) ??
         httpsSource(result.company.websiteUrl);
       if (!sourceUrl) {
@@ -474,6 +481,12 @@ export class SiteFinderProgressPublisher {
           roleCategory: contact.roleCategory,
           sourceKind: evidence?.sourceKind ?? "company_website",
           sourceUrl,
+          ...(evidence?.sourceKind === "apollo"
+            ? {
+                evidenceExcerpt:
+                  "Apollo licensed-provider result. Open the linked profile for independent public verification.",
+              }
+            : {}),
           crmComparison:
             comparisonByCandidate.get(contact.id) ??
             "conflicting_multiple_matches",
@@ -481,7 +494,11 @@ export class SiteFinderProgressPublisher {
             (point) => point.status === "public",
           )
             ? "public_email_found"
-            : "not_publicly_found",
+            : contact.emails.some(
+                  (point) => point.status === "licensed_provider",
+                )
+              ? "licensed_business_email_found"
+              : "not_publicly_found",
           confidence: contact.confidence,
         },
       });

@@ -32,6 +32,9 @@ export function researchCandidateApprovalBlockReason(candidate) {
     }[candidate?.crmComparison] || 'A verified exact-email CRM comparison is required before approval.';
   }
   if (candidate?.emailStatus !== 'public_email_found') {
+    if (candidate?.emailStatus === 'licensed_business_email_found') {
+      return 'This licensed-provider email needs independent public verification before approval.';
+    }
     return 'Only a publicly sourced work email can be approved.';
   }
   if (

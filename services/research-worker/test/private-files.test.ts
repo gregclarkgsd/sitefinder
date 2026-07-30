@@ -22,6 +22,7 @@ test("accepts matching website domains and rejects mismatched ones", async (t) =
         name: "Example Ltd",
         domain: "example.com",
         websiteUrl: "https://www.example.com/team",
+        apolloSearchDomain: "people.example.com",
         source: "file",
         sourceIds: {
           attio: ["attio-company-1"],
@@ -32,6 +33,7 @@ test("accepts matching website domains and rejects mismatched ones", async (t) =
   );
   const seeds = await loadCompanySeeds(matching);
   assert.equal(seeds[0]?.websiteUrl, "https://www.example.com/team");
+  assert.equal(seeds[0]?.apolloSearchDomain, "people.example.com");
   assert.deepEqual(seeds[0]?.sourceIds, {
     attio: ["attio-company-1"],
     pipedrive: ["42"],
@@ -52,6 +54,23 @@ test("accepts matching website domains and rejects mismatched ones", async (t) =
   await assert.rejects(
     loadCompanySeeds(mismatched),
     /Website domain does not match company domain/u,
+  );
+
+  const invalidApolloDomain = join(directory, "invalid-apollo-domain.json");
+  await writeFile(
+    invalidApolloDomain,
+    JSON.stringify([
+      {
+        name: "Example Ltd",
+        domain: "example.com",
+        apolloSearchDomain: "people.example.com/path",
+        source: "file",
+      },
+    ]),
+  );
+  await assert.rejects(
+    loadCompanySeeds(invalidApolloDomain),
+    /Invalid Apollo search domain/u,
   );
 });
 

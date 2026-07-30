@@ -14,8 +14,10 @@ import {
 } from './research-agent-ingest.js';
 import {
   applyResearchCandidateReview,
+  applyResearchRunRequest,
   applyResearchRunControl,
   parseResearchControlRequest,
+  parseResearchRunRequest,
   parseResearchReviewRequest,
   ResearchActionError,
 } from './research-agent-actions.js';
@@ -317,6 +319,30 @@ app.post('/api/research/runs/:runId/control', requireSiteFinderAuth, async (req,
       res,
       error,
       'Research control state could not be updated',
+    );
+  }
+});
+
+app.post('/api/research/runs', requireSiteFinderAuth, async (req, res) => {
+  if (!researchAdminClient) {
+    return res.status(503).json({error: 'Research requests are not configured'});
+  }
+  if (!req.siteFinderAuth?.userId) {
+    return res.status(403).json({error: 'A signed-in GSD user is required'});
+  }
+  try {
+    const input = parseResearchRunRequest(req.body);
+    const result = await applyResearchRunRequest(
+      researchAdminClient,
+      input,
+      req.siteFinderAuth.userId,
+    );
+    return res.status(201).json(result);
+  } catch (error) {
+    return researchActionError(
+      res,
+      error,
+      'Research request could not be queued',
     );
   }
 });

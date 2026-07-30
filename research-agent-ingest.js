@@ -91,7 +91,11 @@ const candidateUpsert = z.object({
       'conflicting_multiple_matches',
       'unverifiable_no_email',
     ]),
-    emailStatus: z.enum(['public_email_found', 'not_publicly_found']),
+    emailStatus: z.enum([
+      'public_email_found',
+      'licensed_business_email_found',
+      'not_publicly_found',
+    ]),
     confidence: z.number().min(0).max(1),
   }).strict(),
 }).strict();
