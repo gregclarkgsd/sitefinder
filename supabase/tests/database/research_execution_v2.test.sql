@@ -283,7 +283,7 @@ select is(
     ),
     array['website'],
     '30000000-0000-0000-0000-000000000001',
-    2
+    2::smallint
   ) ->> 'status',
   'queued',
   'the service role creates a bounded protocol-v2 run atomically'
@@ -459,7 +459,7 @@ begin
     ),
     array['website'],
     '30000000-0000-0000-0000-000000000001',
-    2
+    2::smallint
   );
   receipt := public.claim_research_run_v2(
     '34000000-0000-0000-0000-000000000010',
@@ -505,7 +505,7 @@ begin
     ),
     array['website'],
     '30000000-0000-0000-0000-000000000001',
-    2
+    2::smallint
   );
   perform public.transition_research_run_v2(
     '34000000-0000-0000-0000-000000000101',
