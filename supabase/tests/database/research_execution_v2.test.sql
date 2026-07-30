@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(34);
+select plan(43);
 
 insert into auth.users (id, email, created_at, updated_at)
 values (
@@ -289,6 +289,45 @@ select is(
   'the service role creates a bounded protocol-v2 run atomically'
 );
 select is(
+  public.create_research_run_v2(
+    '31000000-0000-0000-0000-000000000001',
+    'Lease fixture',
+    jsonb_build_array(
+      jsonb_build_object(
+        'companyId', 'lease-company',
+        'companyName', 'Lease Company',
+        'domain', 'lease.example'
+      )
+    ),
+    array['website'],
+    '30000000-0000-0000-0000-000000000001',
+    2::smallint
+  ) ->> 'idempotent',
+  'true',
+  'an exact create retry returns its durable receipt'
+);
+select throws_ok(
+  $$
+    select public.create_research_run_v2(
+      '31000000-0000-0000-0000-000000000001',
+      'Conflicting lease fixture',
+      jsonb_build_array(
+        jsonb_build_object(
+          'companyId', 'lease-company',
+          'companyName', 'Lease Company',
+          'domain', 'lease.example'
+        )
+      ),
+      array['website'],
+      '30000000-0000-0000-0000-000000000001',
+      2::smallint
+    )
+  $$,
+  '23505',
+  'research_run_v2_request_conflict',
+  'a reused run ID cannot change its creation request'
+);
+select is(
   public.claim_research_run_v2(
     '31000000-0000-0000-0000-000000000010',
     'lease-worker-a',
@@ -312,16 +351,40 @@ select
     120
   ) ->> 'claimId';
 select is(
-  public.claim_research_run_v2(
-    '31000000-0000-0000-0000-000000000010',
-    'lease-worker-a',
-    array['website'],
-    'lease-token-a-0000000000000000000000000000',
-    pg_temp.research_attestation_v2('a'),
-    120
-  ) ->> 'idempotent',
-  'true',
-  'retrying the same claim request returns the same live claim'
+  (
+    public.claim_research_run_v2(
+      '31000000-0000-0000-0000-000000000010',
+      'lease-worker-a',
+      array['website'],
+      'lease-token-a-0000000000000000000000000000',
+      pg_temp.research_attestation_v2('a'),
+      120
+    ) ->> 'idempotent'
+  )
+    || ':'
+    || (
+      public.claim_research_run_v2(
+        '31000000-0000-0000-0000-000000000010',
+        'lease-worker-a',
+        array['website'],
+        'lease-token-a-0000000000000000000000000000',
+        pg_temp.research_attestation_v2('a'),
+        120
+      ) ->> 'name'
+    )
+    || ':'
+    || (
+      public.claim_research_run_v2(
+        '31000000-0000-0000-0000-000000000010',
+        'lease-worker-a',
+        array['website'],
+        'lease-token-a-0000000000000000000000000000',
+        pg_temp.research_attestation_v2('a'),
+        120
+      ) #>> '{configuration,requestedSources,0}'
+    ),
+  'true:Lease fixture:website',
+  'retrying a live claim returns its complete work payload'
 );
 select is(
   public.claim_research_run_v2(
@@ -491,6 +554,38 @@ select is(
   'cancelled',
   'a stopped run becomes cancelled when its active worker fails'
 );
+select is(
+  public.fail_research_claim_v2(
+    (
+      select value::uuid
+      from v2_test_context
+      where key = 'failure_claim_id'
+    ),
+    'failure-token-000000000000000000000000000',
+    'worker_failed_after_stop'
+  ) ->> 'idempotent',
+  'true',
+  'an exact failure retry returns the persisted result'
+);
+select throws_ok(
+  format(
+    $sql$
+      select public.fail_research_claim_v2(
+        %L::uuid,
+        'failure-token-000000000000000000000000000',
+        'different_failure'
+      )
+    $sql$,
+    (
+      select value
+      from v2_test_context
+      where key = 'failure_claim_id'
+    )
+  ),
+  '23505',
+  'research_failure_request_conflict',
+  'a failure retry cannot change its terminal code'
+);
 do $body$
 begin
   perform public.create_research_run_v2(
@@ -621,6 +716,64 @@ select is(
   ) ->> 'sequence',
   '1',
   'a claim-scoped event receives the next run-global sequence'
+);
+select is(
+  (
+    public.append_research_event_v2(
+      (
+        select value::uuid
+        from v2_test_context
+        where key = 'verified_claim_id'
+      ),
+      'verified-run-token-000000000000000000000000',
+      '33000000-0000-0000-0000-000000000011',
+      'company',
+      'Verified company research started.',
+      'https://verified.example/team',
+      '33000000-0000-0000-0000-000000000002'
+    ) ->> 'idempotent'
+  )
+    || ':'
+    || (
+      public.append_research_event_v2(
+        (
+          select value::uuid
+          from v2_test_context
+          where key = 'verified_claim_id'
+        ),
+        'verified-run-token-000000000000000000000000',
+        '33000000-0000-0000-0000-000000000011',
+        'company',
+        'Verified company research started.',
+        'https://verified.example/team',
+        '33000000-0000-0000-0000-000000000002'
+      ) ->> 'sequence'
+    ),
+  'true:1',
+  'an exact event retry returns its original sequence'
+);
+select throws_ok(
+  format(
+    $sql$
+      select public.append_research_event_v2(
+        %L::uuid,
+        'verified-run-token-000000000000000000000000',
+        '33000000-0000-0000-0000-000000000011',
+        'company',
+        'Conflicting event text.',
+        'https://verified.example/team',
+        '33000000-0000-0000-0000-000000000002'
+      )
+    $sql$,
+    (
+      select value
+      from v2_test_context
+      where key = 'verified_claim_id'
+    )
+  ),
+  '23505',
+  'research_event_idempotency_conflict',
+  'an event idempotency key cannot be reused for different content'
 );
 select lives_ok(
   $$
@@ -841,6 +994,89 @@ select lives_ok(
   ),
   'an exact fresh manifest atomically completes the run'
 );
+select is(
+  (
+    public.complete_research_run_v2(
+      (
+        select id
+        from public.research_run_claims
+        where claim_request_id =
+          '33000000-0000-0000-0000-000000000010'
+      ),
+      'verified-run-token-000000000000000000000000',
+      pg_temp.research_manifest_v2(
+        (
+          select id
+          from public.research_run_claims
+          where claim_request_id =
+            '33000000-0000-0000-0000-000000000010'
+        )
+      ),
+      private.research_sha256_v2(
+        pg_temp.research_manifest_v2(
+          (
+            select id
+            from public.research_run_claims
+            where claim_request_id =
+              '33000000-0000-0000-0000-000000000010'
+          )
+        )
+      )
+    ) ->> 'candidateSetSha256'
+  ) || ':' || (
+    public.complete_research_run_v2(
+      (
+        select id
+        from public.research_run_claims
+        where claim_request_id =
+          '33000000-0000-0000-0000-000000000010'
+      ),
+      'verified-run-token-000000000000000000000000',
+      pg_temp.research_manifest_v2(
+        (
+          select id
+          from public.research_run_claims
+          where claim_request_id =
+            '33000000-0000-0000-0000-000000000010'
+        )
+      ),
+      private.research_sha256_v2(
+        pg_temp.research_manifest_v2(
+          (
+            select id
+            from public.research_run_claims
+            where claim_request_id =
+              '33000000-0000-0000-0000-000000000010'
+          )
+        )
+      )
+    ) ->> 'taskSetSha256'
+  ),
+  (
+    select candidate_set_sha256 || ':' || task_set_sha256
+    from public.research_run_completions
+    where run_id = '33000000-0000-0000-0000-000000000001'
+  ),
+  'a completion retry returns both verified set hashes'
+);
+select is(
+  public.append_research_event_v2(
+    (
+      select id
+      from public.research_run_claims
+      where claim_request_id =
+        '33000000-0000-0000-0000-000000000010'
+    ),
+    'verified-run-token-000000000000000000000000',
+    '33000000-0000-0000-0000-000000000011',
+    'company',
+    'Verified company research started.',
+    'https://verified.example/team',
+    '33000000-0000-0000-0000-000000000002'
+  ) ->> 'idempotent',
+  'true',
+  'an exact event retry survives claim completion'
+);
 
 update public.research_run_claims
 set input_expires_at = now() - interval '1 second'
@@ -986,6 +1222,17 @@ select lives_ok(
     )
   ),
   'handoff enforces suppression and never authorises CRM or outreach'
+);
+select throws_ok(
+  $$
+    update public.research_contact_handoff_attempts
+    set token_sha256 = repeat('9', 64)
+    where claim_request_id =
+      '33000000-0000-0000-0000-000000000020'
+  $$,
+  '55000',
+  'research_integrity_v2_handoff_attempt_immutable',
+  'handoff attempt identity and bearer-token evidence are immutable'
 );
 
 select * from finish();
