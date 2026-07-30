@@ -253,6 +253,13 @@ test('claims one reviewed run with a conditional queued-status update', async ()
       && call[2] === 'status'
       && call[3] === 'queued',
   ));
+  assert.ok(calls.some(
+    call =>
+      call[0] === 'eq'
+      && call[1] === 'research_runs'
+      && call[2] === 'execution_protocol'
+      && call[3] === 1,
+  ));
 });
 
 test('returns no work when another worker wins the conditional update', async () => {

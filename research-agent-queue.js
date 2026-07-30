@@ -190,7 +190,8 @@ export async function claimNextResearchRun(
     let query = client
       .from('research_runs')
       .select('id,name,source,status,company_limit,configuration,created_at')
-      .eq('status', 'queued');
+      .eq('status', 'queued')
+      .eq('execution_protocol', 1);
     if (cursor) {
       query = query.or(
         `created_at.gt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.gt.${cursor.id})`,

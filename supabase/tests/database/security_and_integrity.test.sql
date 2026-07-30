@@ -326,12 +326,23 @@ select lives_ok(
 set local session_replication_role = origin;
 select ok(
   exists (
-    select 1 from pg_constraint
+    select 1
+    from pg_constraint
     where conrelid = 'public.research_events'::regclass
       and contype = 'u'
       and pg_get_constraintdef(oid) = 'UNIQUE (run_id, sequence)'
+  )
+  and exists (
+    select 1
+    from pg_indexes
+    where schemaname = 'public'
+      and tablename = 'research_events'
+      and indexname = 'research_events_claim_sequence_uidx'
+      and indexdef like 'CREATE UNIQUE INDEX%'
+      and indexdef like '%(claim_id, sequence)%'
+      and indexdef like '%WHERE (claim_id IS NOT NULL)%'
   ),
-  'research events have one sequence number per run'
+  'research events preserve legacy upsert identity and add claim identity'
 );
 select ok(
   exists (
