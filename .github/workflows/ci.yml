@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  DO_NOT_TRACK: "1"
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -21,10 +24,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.x
           cache: npm
@@ -38,8 +41,8 @@ jobs:
       - name: Build production bundle
         run: npm run build
 
-      - name: Audit production dependencies
-        run: npm audit --omit=dev
+      - name: Audit all root dependencies
+        run: npm audit
 
   deno-tests:
     name: Deno tests
@@ -48,15 +51,45 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Deno
-        uses: denoland/setup-deno@v2
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
-          deno-version: v2.x
+          deno-version: v2.8.1
 
       - name: Run Edge helper tests
         run: deno test supabase/functions/_shared/*.test.ts
+
+  database-tests:
+    name: Database migrations and RLS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Confirm Docker is available
+        run: docker version
+
+      - name: Start local Supabase stack
+        run: npx --no-install supabase start
+
+      - name: Apply every migration from a clean local database
+        run: npx --no-install supabase db reset --local --no-seed
+
+      - name: Run database security and integrity tests
+        run: npx --no-install supabase test db --local supabase/tests/database
 
   research-worker-checks:
     name: Research worker checks
@@ -69,10 +102,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.x
           cache: npm
