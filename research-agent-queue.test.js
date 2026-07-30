@@ -47,12 +47,16 @@ function queueClient({
   claimWins = true,
 } = {}) {
   const calls = [];
-  let runReads = 0;
   return {
     calls,
     client: {
       from(table) {
-        const state = {table, operation: 'select', values: null};
+        const state = {
+          table,
+          operation: 'select',
+          values: null,
+          filters: {},
+        };
         const chain = {
           select(columns) {
             calls.push(['select', table, columns]);
@@ -65,30 +69,40 @@ function queueClient({
             return chain;
           },
           eq(column, value) {
+            state.filters[column] = value;
             calls.push(['eq', table, column, value]);
             return chain;
           },
           order(column, options) {
             calls.push(['order', table, column, options]);
             if (table === 'research_tasks') {
-              return Promise.resolve({data: tasks, error: null});
+              return Promise.resolve({
+                data: tasks.filter(
+                  queuedTask => queuedTask.run_id === state.filters.run_id,
+                ),
+                error: null,
+              });
             }
             return chain;
           },
           limit(value) {
             calls.push(['limit', table, value]);
+            if (table === 'research_runs') {
+              return Promise.resolve({
+                data: queuedRuns.slice(0, value),
+                error: null,
+              });
+            }
             return chain;
           },
           async maybeSingle() {
             if (state.operation === 'update') {
               return {
-                data: claimWins ? {id: runId} : null,
+                data: claimWins ? {id: state.filters.id} : null,
                 error: null,
               };
             }
-            const value = queuedRuns[runReads] ?? null;
-            runReads += 1;
-            return {data: value, error: null};
+            return {data: null, error: null};
           },
           then(resolve) {
             resolve({data: null, error: null});
@@ -103,10 +117,32 @@ function queueClient({
 test('accepts only bounded non-sensitive worker identifiers', () => {
   assert.deepEqual(
     parseResearchQueueClaimRequest({workerId: 'gsd-local-worker'}),
-    {workerId: 'gsd-local-worker'},
+    {
+      workerId: 'gsd-local-worker',
+      availableSources: [
+        'website',
+        'apollo',
+        'companiesHouse',
+        'procurement',
+      ],
+    },
+  );
+  assert.deepEqual(
+    parseResearchQueueClaimRequest({
+      workerId: 'public-worker',
+      availableSources: ['website', 'procurement'],
+    }),
+    {
+      workerId: 'public-worker',
+      availableSources: ['website', 'procurement'],
+    },
   );
   assert.throws(() => parseResearchQueueClaimRequest({
     workerId: 'Greg’s MacBook /Users/greg',
+  }));
+  assert.throws(() => parseResearchQueueClaimRequest({
+    workerId: 'worker-without-website',
+    availableSources: ['apollo'],
   }));
 });
 
@@ -114,7 +150,10 @@ test('claims one reviewed run with a conditional queued-status update', async ()
   const {client, calls} = queueClient();
   const result = await claimNextResearchRun(
     client,
-    {workerId: 'gsd-local-worker'},
+    {
+      workerId: 'gsd-local-worker',
+      availableSources: ['website', 'apollo'],
+    },
     {now: () => claimedAt},
   );
   assert.deepEqual(result, {
@@ -137,6 +176,10 @@ test('claims one reviewed run with a conditional queued-status update', async ()
     call => call[0] === 'update' && call[2].status === 'running',
   );
   assert.equal(claimUpdate[2].configuration.workerClaim.workerId, 'gsd-local-worker');
+  assert.deepEqual(
+    claimUpdate[2].configuration.workerClaim.availableSources,
+    ['website', 'apollo'],
+  );
   assert.ok(calls.some(
     call =>
       call[0] === 'eq'
@@ -148,7 +191,7 @@ test('claims one reviewed run with a conditional queued-status update', async ()
 
 test('returns no work when another worker wins the conditional update', async () => {
   const {client} = queueClient({
-    queuedRuns: [run, null],
+    queuedRuns: [run],
     claimWins: false,
   });
   assert.deepEqual(
@@ -161,13 +204,73 @@ test('returns no work when another worker wins the conditional update', async ()
   );
 });
 
+test('leaves unsupported runs queued and claims the oldest compatible run', async () => {
+  const compatibleRunId = '33333333-3333-4333-8333-333333333333';
+  const compatibleRun = {
+    ...run,
+    id: compatibleRunId,
+    name: 'Website-only contractor queue',
+    configuration: {
+      ...run.configuration,
+      requestedSources: ['website'],
+      companies: [{
+        companyId: 'sitefinder_contractor:456',
+        domain: 'example.co.uk',
+      }],
+    },
+  };
+  const compatibleTask = {
+    ...task,
+    id: stableResearchTaskId(
+      compatibleRunId,
+      'sitefinder_contractor:456',
+    ),
+    run_id: compatibleRunId,
+    company_id: 'sitefinder_contractor:456',
+    company_name: 'Example Construction',
+    domain: 'example.co.uk',
+  };
+  const {client, calls} = queueClient({
+    queuedRuns: [run, compatibleRun],
+    tasks: [task, compatibleTask],
+  });
+
+  const result = await claimNextResearchRun(
+    client,
+    {
+      workerId: 'public-source-worker',
+      availableSources: ['website', 'procurement'],
+    },
+    {now: () => claimedAt},
+  );
+
+  assert.equal(result.claimed, true);
+  assert.equal(result.run.id, compatibleRunId);
+  assert.deepEqual(result.run.requestedSources, ['website']);
+  assert.equal(
+    calls.some(
+      call =>
+        call[0] === 'update'
+        && call[2].status === 'failed',
+    ),
+    false,
+  );
+  assert.ok(calls.some(
+    call =>
+      call[0] === 'eq'
+      && call[1] === 'research_runs'
+      && call[2] === 'id'
+      && call[3] === compatibleRunId,
+  ));
+});
+
 test('fails a malformed queued request before it can be claimed', async () => {
   const malformed = {
     ...run,
     company_limit: 2,
   };
   const {client, calls} = queueClient({
-    queuedRuns: [malformed, null],
+    queuedRuns: [malformed],
   });
   assert.deepEqual(
     await claimNextResearchRun(

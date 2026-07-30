@@ -12,6 +12,21 @@ const source = z.enum([
   'companiesHouse',
   'procurement',
 ]);
+const allSources = [
+  'website',
+  'apollo',
+  'companiesHouse',
+  'procurement',
+];
+const availableSources = z.array(source)
+  .min(1)
+  .max(4)
+  .refine(values => new Set(values).size === values.length, {
+    message: 'Available worker sources must be unique',
+  })
+  .refine(values => values.includes('website'), {
+    message: 'Every research worker must support official websites',
+  });
 const workerId = z.string()
   .trim()
   .min(1)
@@ -91,15 +106,21 @@ const queuedTask = z.object({
 
 const claimRequest = z.object({
   workerId,
+  availableSources: availableSources.default(allSources),
 }).strict();
 
 export function parseResearchQueueClaimRequest(body) {
   return claimRequest.parse(body);
 }
 
-function prepareClaim(runValue, taskValues) {
+function prepareQueuedRun(runValue) {
   const run = queuedRun.parse(runValue);
   const configuration = storedConfiguration.parse(run.configuration);
+  return {run, configuration};
+}
+
+function prepareClaim(preparedRun, taskValues) {
+  const {run, configuration} = preparedRun;
   const tasks = z.array(queuedTask).min(1).max(25).parse(taskValues);
   if (
     tasks.length !== run.company_limit
@@ -150,16 +171,34 @@ export async function claimNextResearchRun(
   {now = () => new Date().toISOString(), maxAttempts = 10} = {},
 ) {
   const request = claimRequest.parse(input);
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const {data: runValue, error: runError} = await client
-      .from('research_runs')
-      .select('id,name,source,status,company_limit,configuration,created_at')
-      .eq('status', 'queued')
-      .order('created_at', {ascending: true})
-      .limit(1)
-      .maybeSingle();
-    if (runError) throw runError;
-    if (!runValue) return {claimed: false};
+  const {data: runValues, error: runError} = await client
+    .from('research_runs')
+    .select('id,name,source,status,company_limit,configuration,created_at')
+    .eq('status', 'queued')
+    .order('created_at', {ascending: true})
+    .limit(maxAttempts);
+  if (runError) throw runError;
+  if (!runValues?.length) return {claimed: false};
+
+  const supportedSources = new Set(request.availableSources);
+  for (const runValue of runValues) {
+    let preparedRun;
+    try {
+      preparedRun = prepareQueuedRun(runValue);
+    } catch {
+      const invalidRunId = uuid.safeParse(runValue?.id);
+      if (invalidRunId.success) {
+        await failInvalidQueuedRun(client, invalidRunId.data, now());
+      }
+      continue;
+    }
+    if (
+      preparedRun.configuration.requestedSources.some(
+        requestedSource => !supportedSources.has(requestedSource),
+      )
+    ) {
+      continue;
+    }
 
     const {data: taskValues, error: taskError} = await client
       .from('research_tasks')
@@ -170,9 +209,9 @@ export async function claimNextResearchRun(
 
     let prepared;
     try {
-      prepared = prepareClaim(runValue, taskValues || []);
+      prepared = prepareClaim(preparedRun, taskValues || []);
     } catch {
-      await failInvalidQueuedRun(client, runValue.id, now());
+      await failInvalidQueuedRun(client, preparedRun.run.id, now());
       continue;
     }
 
@@ -182,6 +221,7 @@ export async function claimNextResearchRun(
       workerClaim: {
         workerId: request.workerId,
         claimedAt,
+        availableSources: request.availableSources,
       },
     };
     const {data: claimed, error: claimError} = await client

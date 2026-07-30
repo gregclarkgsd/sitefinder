@@ -31,6 +31,7 @@ import {
   SiteFinderProgressPublisher,
   SiteFinderQueueClient,
   type ClaimedResearchRun,
+  type ResearchSource,
 } from "./observability/sitefinder-progress.js";
 import {
   enrichCompanies,
@@ -1127,8 +1128,16 @@ async function runQueue(): Promise<void> {
   );
   await preflightQueueInputs(inputs);
 
+  const availableSources: ResearchSource[] = ["website", "procurement"];
+  if (config.apolloApiKey) availableSources.push("apollo");
+  if (config.companiesHouseApiKey) {
+    availableSources.push("companiesHouse");
+  }
   const queue = new SiteFinderQueueClient({ endpoint, token });
-  const run = await queue.claim(config.researchWorkerId);
+  const run = await queue.claim(
+    config.researchWorkerId,
+    availableSources,
+  );
   if (!run) {
     console.log(JSON.stringify({ claimed: false }));
     return;
