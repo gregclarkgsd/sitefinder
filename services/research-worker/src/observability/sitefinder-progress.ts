@@ -105,6 +105,7 @@ const emptyQueueSchema = z.object({
 }).strict();
 
 export type ClaimedResearchRun = z.infer<typeof queueClaimSchema>["run"];
+export type ResearchSource = ClaimedResearchRun["requestedSources"][number];
 
 export class SiteFinderQueueClient {
   private readonly endpoint: string;
@@ -134,7 +135,10 @@ export class SiteFinderQueueClient {
     await assertPublicHttpUrl(url);
   }
 
-  async claim(workerId: string): Promise<ClaimedResearchRun | undefined> {
+  async claim(
+    workerId: string,
+    availableSources: ResearchSource[],
+  ): Promise<ClaimedResearchRun | undefined> {
     const claimUrl = new URL("/api/research/worker/claim", this.endpoint);
     await this.assertEndpointHostIsPublic();
     const response = await this.fetchImpl(claimUrl, {
@@ -144,7 +148,7 @@ export class SiteFinderQueueClient {
         Authorization: `Bearer ${this.token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ workerId }),
+      body: JSON.stringify({ workerId, availableSources }),
       redirect: "error",
       signal: AbortSignal.timeout(this.timeoutMs),
     });

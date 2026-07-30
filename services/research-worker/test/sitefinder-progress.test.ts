@@ -176,12 +176,15 @@ test("claims and validates the next reviewed SiteFinder queue run", async () => 
     },
   });
 
-  const run = await queue.claim("worker-1");
+  const run = await queue.claim("worker-1", ["website", "apollo"]);
   assert.equal(
     requestedUrl,
     "https://sitefinder.example/api/research/worker/claim",
   );
-  assert.deepEqual(JSON.parse(requestedBody), { workerId: "worker-1" });
+  assert.deepEqual(JSON.parse(requestedBody), {
+    workerId: "worker-1",
+    availableSources: ["website", "apollo"],
+  });
   assert.equal(run?.companies[0]?.companyId, "company-1");
 });
 
@@ -202,9 +205,14 @@ test("returns no work for an empty queue and rejects malformed claims", async ()
       ),
   });
 
-  assert.equal(await queue.claim("worker-1"), undefined);
+  assert.equal(
+    await queue.claim("worker-1", ["website", "procurement"]),
+    undefined,
+  );
   malformed = true;
-  await assert.rejects(queue.claim("worker-1"));
+  await assert.rejects(
+    queue.claim("worker-1", ["website", "procurement"]),
+  );
 });
 
 test("continues a queued run with its original ID and event sequence", async () => {

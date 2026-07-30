@@ -315,6 +315,11 @@ evidence pack under `queue-runs/<run-id>`, and exits. Apollo is contacted only
 when that reviewed request includes Apollo, so an empty queue and failed
 preflight consume no Apollo credits.
 
+The worker derives its available-source list from the credentials present in
+its local environment. Requests needing an unavailable Apollo or Companies
+House key remain queued for a compatible worker; they are not claimed and
+failed merely because this laptop lacks that provider credential.
+
 Every retained discovery is compared by exact normalized business email with
 the two verified CRM snapshots. Results are one of: already in Attio,
 Pipedrive-only, missing from both, conflicting matches, or unverifiable.

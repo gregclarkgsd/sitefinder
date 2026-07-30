@@ -191,6 +191,11 @@ CRM snapshot manifests first, conditionally claims one oldest queued run, and
 publishes progress against that same run. It exits after one run rather than
 remaining as an unattended daemon.
 
+Each worker advertises the sources it can actually use from its local
+credentials. A worker without an Apollo or Companies House key leaves runs
+requiring that provider safely queued and may claim the oldest compatible
+public-source run instead.
+
 The production connection must preserve the same boundary:
 
 - research runs, company tasks, source events and candidate decisions are saved;
