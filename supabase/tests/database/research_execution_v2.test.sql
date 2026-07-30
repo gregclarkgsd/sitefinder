@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(29);
+select plan(34);
 
 insert into auth.users (id, email, created_at, updated_at)
 values (
@@ -269,32 +269,25 @@ select ok(
 );
 
 -- Lease race, idempotency, wrong-token rejection, reclaim, and dead-letter.
-insert into public.research_runs (
-  id, name, source, status, company_limit, configuration,
-  execution_protocol, max_attempts
-)
-values (
-  '31000000-0000-0000-0000-000000000001',
-  'Lease fixture',
-  'file',
-  'queued',
-  1,
-  '{"requestedSources":["website"],"requestVersion":2}',
-  2,
-  2
-);
-insert into public.research_tasks (
-  id, run_id, company_id, company_name, domain
-)
-values (
-  '31000000-0000-0000-0000-000000000002',
-  '31000000-0000-0000-0000-000000000001',
-  'lease-company',
-  'Lease Company',
-  'lease.example'
-);
-
 set local role service_role;
+select is(
+  public.create_research_run_v2(
+    '31000000-0000-0000-0000-000000000001',
+    'Lease fixture',
+    jsonb_build_array(
+      jsonb_build_object(
+        'companyId', 'lease-company',
+        'companyName', 'Lease Company',
+        'domain', 'lease.example'
+      )
+    ),
+    array['website'],
+    '30000000-0000-0000-0000-000000000001',
+    2
+  ) ->> 'status',
+  'queued',
+  'the service role creates a bounded protocol-v2 run atomically'
+);
 select is(
   public.claim_research_run_v2(
     '31000000-0000-0000-0000-000000000010',
@@ -365,8 +358,8 @@ select throws_ok(
     set name = 'Legacy bypass attempt'
     where id = '31000000-0000-0000-0000-000000000001'
   $$,
-  '55000',
-  'research_protocol_v2_rpc_required',
+  '42501',
+  'permission denied for table research_runs',
   'direct service-role DML cannot bypass protocol-v2 RPCs'
 );
 reset role;
@@ -448,6 +441,91 @@ select is(
   'exhausted work enters the dead-letter state'
 );
 
+-- Stop/failure and queued-cancel terminalization execute their RPC bodies.
+set local role service_role;
+do $body$
+declare
+  receipt jsonb;
+begin
+  perform public.create_research_run_v2(
+    '34000000-0000-0000-0000-000000000001',
+    'Failure fixture',
+    jsonb_build_array(
+      jsonb_build_object(
+        'companyId', 'failure-company',
+        'companyName', 'Failure Company',
+        'domain', 'failure.example'
+      )
+    ),
+    array['website'],
+    '30000000-0000-0000-0000-000000000001',
+    2
+  );
+  receipt := public.claim_research_run_v2(
+    '34000000-0000-0000-0000-000000000010',
+    'failure-worker',
+    array['website'],
+    'failure-token-000000000000000000000000000',
+    pg_temp.research_attestation_v2('4'),
+    120
+  );
+  insert into v2_test_context (key, value)
+  values ('failure_claim_id', receipt ->> 'claimId');
+  perform public.transition_research_run_v2(
+    '34000000-0000-0000-0000-000000000001',
+    'stop',
+    '30000000-0000-0000-0000-000000000001'
+  );
+end
+$body$;
+select is(
+  public.fail_research_claim_v2(
+    (
+      select value::uuid
+      from v2_test_context
+      where key = 'failure_claim_id'
+    ),
+    'failure-token-000000000000000000000000000',
+    'worker_failed_after_stop'
+  ) ->> 'status',
+  'cancelled',
+  'a stopped run becomes cancelled when its active worker fails'
+);
+do $body$
+begin
+  perform public.create_research_run_v2(
+    '34000000-0000-0000-0000-000000000101',
+    'Queued cancel fixture',
+    jsonb_build_array(
+      jsonb_build_object(
+        'companyId', 'cancel-company',
+        'companyName', 'Cancel Company',
+        'domain', 'cancel.example'
+      )
+    ),
+    array['website'],
+    '30000000-0000-0000-0000-000000000001',
+    2
+  );
+  perform public.transition_research_run_v2(
+    '34000000-0000-0000-0000-000000000101',
+    'cancel',
+    '30000000-0000-0000-0000-000000000001'
+  );
+end
+$body$;
+reset role;
+select is(
+  (
+    select run.status || ':' || task.status
+    from public.research_runs run
+    join public.research_tasks task on task.run_id = run.id
+    where run.id = '34000000-0000-0000-0000-000000000101'
+  ),
+  'cancelled:skipped',
+  'cancelling queued work terminalizes every waiting task'
+);
+
 insert into public.research_runs (id, name, company_limit)
 values (
   '32000000-0000-0000-0000-000000000001',
@@ -527,6 +605,42 @@ select
     pg_temp.research_attestation_v2('1'),
     300
   ) ->> 'claimId';
+select is(
+  public.append_research_event_v2(
+    (
+      select value::uuid
+      from v2_test_context
+      where key = 'verified_claim_id'
+    ),
+    'verified-run-token-000000000000000000000000',
+    '33000000-0000-0000-0000-000000000011',
+    'company',
+    'Verified company research started.',
+    'https://verified.example/team',
+    '33000000-0000-0000-0000-000000000002'
+  ) ->> 'sequence',
+  '1',
+  'a claim-scoped event receives the next run-global sequence'
+);
+select lives_ok(
+  $$
+    do $body$
+    begin
+      perform public.transition_research_run_v2(
+        '33000000-0000-0000-0000-000000000001',
+        'pause',
+        '30000000-0000-0000-0000-000000000001'
+      );
+      perform public.transition_research_run_v2(
+        '33000000-0000-0000-0000-000000000001',
+        'resume',
+        '30000000-0000-0000-0000-000000000001'
+      );
+    end
+    $body$
+  $$,
+  'a live claimed run can pause and resume through the transition RPC'
+);
 reset role;
 
 select lives_ok(

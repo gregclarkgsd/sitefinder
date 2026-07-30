@@ -1976,11 +1976,16 @@ begin
       message = 'research_run_not_found';
   end if;
 
-  -- If the initial claim lookup saw no row but the now-locked run says a worker
-  -- owns it, a concurrent claimer committed while this statement waited for
-  -- the run lock. Abort with a serialization error: retrying will observe and
-  -- lock the claim first, preserving the global claim -> run lock order.
-  if claim.id is null and run.status in ('running', 'stopping') then
+  -- If the initial claim lookup saw no row but a non-locking recheck under the
+  -- run lock sees one, a concurrent claim or pause committed while this
+  -- statement waited. Abort: retrying will observe and lock the claim first,
+  -- preserving the global claim -> run lock order without taking run -> claim.
+  if claim.id is null and exists (
+    select 1
+    from public.research_run_claims concurrent_claim
+    where concurrent_claim.run_id = run.id
+      and concurrent_claim.status = 'active'
+  ) then
     raise exception using
       errcode = '40001',
       message = 'research_run_transition_retry';
@@ -2077,28 +2082,32 @@ begin
     claim := null;
   end if;
 
-  next_status := case action
-    when 'pause' then
-      case when run.status = 'running' then 'paused' else null end
-    when 'resume' then
-      case
-        when run.status = 'paused' and claim.id is not null then 'running'
-        when run.status = 'paused' then 'queued'
-        else null
-      end
-    when 'stop' then
-      case
-        when run.status in ('running', 'paused') and claim.id is not null
-          then 'stopping'
-        when run.status in ('queued', 'paused') then 'cancelled'
-        else null
-      end
-    when 'cancel' then
-      case
-        when run.status in ('queued', 'running', 'paused', 'stopping')
-          then 'cancelled'
-        else null
-      end
+  next_status := case
+    when reclaim_status = 'cancelled' and action in ('stop', 'cancel')
+      then 'cancelled'
+    else case action
+      when 'pause' then
+        case when run.status = 'running' then 'paused' else null end
+      when 'resume' then
+        case
+          when run.status = 'paused' and claim.id is not null then 'running'
+          when run.status = 'paused' then 'queued'
+          else null
+        end
+      when 'stop' then
+        case
+          when run.status in ('running', 'paused') and claim.id is not null
+            then 'stopping'
+          when run.status in ('queued', 'paused') then 'cancelled'
+          else null
+        end
+      when 'cancel' then
+        case
+          when run.status in ('queued', 'running', 'paused', 'stopping')
+            then 'cancelled'
+          else null
+        end
+    end
   end;
 
   if next_status is null then
@@ -2107,13 +2116,15 @@ begin
       message = 'research_run_transition_not_allowed';
   end if;
 
-  if action = 'cancel' and claim.id is not null then
-    update public.research_run_claims
-    set
-      status = 'revoked',
-      ended_at = operation_time,
-      end_code = 'cancelled_by_user'
-    where id = claim.id;
+  if next_status = 'cancelled' then
+    if claim.id is not null then
+      update public.research_run_claims
+      set
+        status = 'revoked',
+        ended_at = operation_time,
+        end_code = 'cancelled_by_user'
+      where id = claim.id;
+    end if;
 
     update public.research_tasks
     set
@@ -2126,7 +2137,7 @@ begin
       updated_by = actor_id,
       updated_at = operation_time
     where research_tasks.run_id = run.id
-      and research_tasks.claim_id = claim.id;
+      and status not in ('completed', 'review', 'skipped');
 
     update public.research_candidates
     set
