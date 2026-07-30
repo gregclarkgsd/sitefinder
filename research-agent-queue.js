@@ -32,6 +32,8 @@ const workerId = z.string()
   .min(1)
   .max(120)
   .regex(/^[a-zA-Z0-9._-]+$/u);
+const DEFAULT_CLAIM_PAGE_SIZE = 10;
+const MAX_CLAIM_PAGE_SIZE = 100;
 
 const storedCompany = z.object({
   companyId: z.string().trim().min(1).max(240),
@@ -168,106 +170,133 @@ async function failInvalidQueuedRun(client, runId, now) {
 export async function claimNextResearchRun(
   client,
   input,
-  {now = () => new Date().toISOString(), maxAttempts = 10} = {},
+  {
+    now = () => new Date().toISOString(),
+    pageSize = DEFAULT_CLAIM_PAGE_SIZE,
+    // Retain the old option as a page-size alias for callers and tests that
+    // supplied it before queue scanning became paginated.
+    maxAttempts,
+  } = {},
 ) {
   const request = claimRequest.parse(input);
-  const {data: runValues, error: runError} = await client
-    .from('research_runs')
-    .select('id,name,source,status,company_limit,configuration,created_at')
-    .eq('status', 'queued')
-    .order('created_at', {ascending: true})
-    .limit(maxAttempts);
-  if (runError) throw runError;
-  if (!runValues?.length) return {claimed: false};
-
+  const requestedPageSize = maxAttempts ?? pageSize;
+  const claimPageSize = Number.isInteger(requestedPageSize)
+    ? Math.min(MAX_CLAIM_PAGE_SIZE, Math.max(1, requestedPageSize))
+    : DEFAULT_CLAIM_PAGE_SIZE;
   const supportedSources = new Set(request.availableSources);
-  for (const runValue of runValues) {
-    let preparedRun;
-    try {
-      preparedRun = prepareQueuedRun(runValue);
-    } catch {
-      const invalidRunId = uuid.safeParse(runValue?.id);
-      if (invalidRunId.success) {
-        await failInvalidQueuedRun(client, invalidRunId.data, now());
-      }
-      continue;
-    }
-    if (
-      preparedRun.configuration.requestedSources.some(
-        requestedSource => !supportedSources.has(requestedSource),
-      )
-    ) {
-      continue;
-    }
+  let cursor = null;
 
-    const {data: taskValues, error: taskError} = await client
-      .from('research_tasks')
-      .select('id,run_id,company_id,company_name,domain,status,created_at')
-      .eq('run_id', runValue.id)
-      .order('created_at', {ascending: true});
-    if (taskError) throw taskError;
-
-    let prepared;
-    try {
-      prepared = prepareClaim(preparedRun, taskValues || []);
-    } catch {
-      await failInvalidQueuedRun(client, preparedRun.run.id, now());
-      continue;
-    }
-
-    const claimedAt = now();
-    const configuration = {
-      ...prepared.configuration,
-      workerClaim: {
-        workerId: request.workerId,
-        claimedAt,
-        availableSources: request.availableSources,
-      },
-    };
-    const {data: claimed, error: claimError} = await client
+  while (true) {
+    let query = client
       .from('research_runs')
-      .update({
-        status: 'running',
-        configuration,
-        failure_message: null,
-        started_at: claimedAt,
-        updated_by: null,
-        updated_at: claimedAt,
-      })
-      .eq('id', prepared.run.id)
-      .eq('status', 'queued')
-      .select('id')
-      .maybeSingle();
-    if (claimError) throw claimError;
-    if (!claimed) continue;
+      .select('id,name,source,status,company_limit,configuration,created_at')
+      .eq('status', 'queued');
+    if (cursor) {
+      query = query.or(
+        `created_at.gt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.gt.${cursor.id})`,
+      );
+    }
+    const {data: runValues, error: runError} = await query
+      .order('created_at', {ascending: true})
+      .order('id', {ascending: true})
+      .limit(claimPageSize);
+    if (runError) throw runError;
+    if (!runValues?.length) return {claimed: false};
 
-    const requestedCompanies = new Map(
-      prepared.configuration.companies.map(company => [
-        company.companyId,
-        company,
-      ]),
-    );
-    return {
-      claimed: true,
-      run: {
-        id: prepared.run.id,
-        name: prepared.run.name,
-        requestedSources: prepared.configuration.requestedSources,
-        apolloMaxPeople: prepared.configuration.apolloMaxPeople,
-        procurementDays: prepared.configuration.procurementDays,
-        companies: prepared.tasks.map(task => {
-          const requested = requestedCompanies.get(task.company_id);
-          return {
-            companyId: task.company_id,
-            companyName: task.company_name,
-            domain: task.domain,
-            ...(requested?.apolloSearchDomain
-              ? {apolloSearchDomain: requested.apolloSearchDomain}
-              : {}),
-          };
-        }),
-      },
+    for (const runValue of runValues) {
+      let preparedRun;
+      try {
+        preparedRun = prepareQueuedRun(runValue);
+      } catch {
+        const invalidRunId = uuid.safeParse(runValue?.id);
+        if (invalidRunId.success) {
+          await failInvalidQueuedRun(client, invalidRunId.data, now());
+        }
+        continue;
+      }
+      if (
+        preparedRun.configuration.requestedSources.some(
+          requestedSource => !supportedSources.has(requestedSource),
+        )
+      ) {
+        continue;
+      }
+
+      const {data: taskValues, error: taskError} = await client
+        .from('research_tasks')
+        .select('id,run_id,company_id,company_name,domain,status,created_at')
+        .eq('run_id', runValue.id)
+        .order('created_at', {ascending: true});
+      if (taskError) throw taskError;
+
+      let prepared;
+      try {
+        prepared = prepareClaim(preparedRun, taskValues || []);
+      } catch {
+        await failInvalidQueuedRun(client, preparedRun.run.id, now());
+        continue;
+      }
+
+      const claimedAt = now();
+      const configuration = {
+        ...prepared.configuration,
+        workerClaim: {
+          workerId: request.workerId,
+          claimedAt,
+          availableSources: request.availableSources,
+        },
+      };
+      const {data: claimed, error: claimError} = await client
+        .from('research_runs')
+        .update({
+          status: 'running',
+          configuration,
+          failure_message: null,
+          started_at: claimedAt,
+          updated_by: null,
+          updated_at: claimedAt,
+        })
+        .eq('id', prepared.run.id)
+        .eq('status', 'queued')
+        .select('id')
+        .maybeSingle();
+      if (claimError) throw claimError;
+      if (!claimed) continue;
+
+      const requestedCompanies = new Map(
+        prepared.configuration.companies.map(company => [
+          company.companyId,
+          company,
+        ]),
+      );
+      return {
+        claimed: true,
+        run: {
+          id: prepared.run.id,
+          name: prepared.run.name,
+          requestedSources: prepared.configuration.requestedSources,
+          apolloMaxPeople: prepared.configuration.apolloMaxPeople,
+          procurementDays: prepared.configuration.procurementDays,
+          companies: prepared.tasks.map(task => {
+            const requested = requestedCompanies.get(task.company_id);
+            return {
+              companyId: task.company_id,
+              companyName: task.company_name,
+              domain: task.domain,
+              ...(requested?.apolloSearchDomain
+                ? {apolloSearchDomain: requested.apolloSearchDomain}
+                : {}),
+            };
+          }),
+        },
+      };
+    }
+
+    const lastRun = runValues.at(-1);
+    cursor = {
+      createdAt: lastRun.created_at,
+      id: lastRun.id,
     };
+    if (runValues.length < claimPageSize) return {claimed: false};
   }
-  return {claimed: false};
 }

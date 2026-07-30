@@ -47,8 +47,11 @@ function queueClient({
   claimWins = true,
 } = {}) {
   const calls = [];
+  const claimIds = [];
+  let claimAttempt = 0;
   return {
     calls,
+    claimIds,
     client: {
       from(table) {
         const state = {
@@ -56,6 +59,7 @@ function queueClient({
           operation: 'select',
           values: null,
           filters: {},
+          cursor: null,
         };
         const chain = {
           select(columns) {
@@ -85,11 +89,36 @@ function queueClient({
             }
             return chain;
           },
+          or(expression) {
+            calls.push(['or', table, expression]);
+            const match = expression.match(
+              /^created_at\.gt\.([^,]+),and\(created_at\.eq\.([^,]+),id\.gt\.([^)]+)\)$/u,
+            );
+            if (!match || match[1] !== match[2]) {
+              throw new Error(`Unexpected queue cursor: ${expression}`);
+            }
+            state.cursor = {
+              createdAt: match[1],
+              id: match[3],
+            };
+            return chain;
+          },
           limit(value) {
             calls.push(['limit', table, value]);
             if (table === 'research_runs') {
+              const ordered = [...queuedRuns]
+                .filter(queuedRun => !state.cursor
+                  || queuedRun.created_at > state.cursor.createdAt
+                  || (
+                    queuedRun.created_at === state.cursor.createdAt
+                    && queuedRun.id > state.cursor.id
+                  ))
+                .sort((left, right) =>
+                  left.created_at.localeCompare(right.created_at)
+                  || left.id.localeCompare(right.id),
+                );
               return Promise.resolve({
-                data: queuedRuns.slice(0, value),
+                data: ordered.slice(0, value),
                 error: null,
               });
             }
@@ -97,8 +126,13 @@ function queueClient({
           },
           async maybeSingle() {
             if (state.operation === 'update') {
+              claimIds.push(state.filters.id);
+              const wins = typeof claimWins === 'function'
+                ? claimWins(state.filters.id, claimAttempt)
+                : claimWins;
+              claimAttempt += 1;
               return {
-                data: claimWins ? {id: state.filters.id} : null,
+                data: wins ? {id: state.filters.id} : null,
                 error: null,
               };
             }
@@ -110,6 +144,38 @@ function queueClient({
         };
         return chain;
       },
+    },
+  };
+}
+
+function queuedRunFixture(index, {
+  requestedSources = ['website', 'apollo'],
+  queuedAt = createdAt,
+} = {}) {
+  const suffix = String(index).padStart(12, '0');
+  const id = `00000000-0000-4000-8000-${suffix}`;
+  const companyId = `sitefinder_contractor:${index}`;
+  const domain = `company-${index}.example`;
+  return {
+    run: {
+      ...run,
+      id,
+      name: `Research queue ${index}`,
+      configuration: {
+        ...run.configuration,
+        requestedSources,
+        companies: [{companyId, domain}],
+      },
+      created_at: queuedAt,
+    },
+    task: {
+      ...task,
+      id: stableResearchTaskId(id, companyId),
+      run_id: id,
+      company_id: companyId,
+      company_name: `Company ${index}`,
+      domain,
+      created_at: queuedAt,
     },
   };
 }
@@ -262,6 +328,105 @@ test('leaves unsupported runs queued and claims the oldest compatible run', asyn
       && call[2] === 'id'
       && call[3] === compatibleRunId,
   ));
+});
+
+test('scans beyond ten older incompatible runs to claim compatible work', async () => {
+  const incompatible = Array.from(
+    {length: 12},
+    (_, index) => queuedRunFixture(index + 1),
+  );
+  const compatible = queuedRunFixture(13, {
+    requestedSources: ['website'],
+  });
+  const {client, calls} = queueClient({
+    queuedRuns: [
+      compatible.run,
+      ...incompatible.map(item => item.run).reverse(),
+    ],
+    tasks: [
+      compatible.task,
+      ...incompatible.map(item => item.task),
+    ],
+  });
+
+  const result = await claimNextResearchRun(
+    client,
+    {
+      workerId: 'public-source-worker',
+      availableSources: ['website', 'procurement'],
+    },
+    {now: () => claimedAt},
+  );
+
+  assert.equal(result.claimed, true);
+  assert.equal(result.run.id, compatible.run.id);
+  assert.equal(
+    calls.filter(call => call[0] === 'limit' && call[1] === 'research_runs').length,
+    2,
+  );
+  assert.equal(
+    calls.some(call => call[0] === 'update' && call[2].status === 'failed'),
+    false,
+  );
+});
+
+test('uses bounded deterministic pages until an incompatible queue is exhausted', async () => {
+  const fixtures = Array.from(
+    {length: 23},
+    (_, index) => queuedRunFixture(index + 1),
+  );
+  const {client, calls} = queueClient({
+    queuedRuns: fixtures.map(item => item.run).reverse(),
+    tasks: fixtures.map(item => item.task),
+  });
+
+  assert.deepEqual(
+    await claimNextResearchRun(
+      client,
+      {
+        workerId: 'website-only-worker',
+        availableSources: ['website'],
+      },
+      {now: () => claimedAt, pageSize: 7},
+    ),
+    {claimed: false},
+  );
+
+  const runLimits = calls
+    .filter(call => call[0] === 'limit' && call[1] === 'research_runs')
+    .map(call => call[2]);
+  assert.deepEqual(runLimits, [7, 7, 7, 7]);
+  assert.equal(
+    calls.filter(call => call[0] === 'select' && call[1] === 'research_tasks').length,
+    0,
+  );
+  assert.equal(
+    calls.some(call => call[0] === 'update' && call[2].status === 'failed'),
+    false,
+  );
+});
+
+test('continues after a lost claim race and claims a later compatible run', async () => {
+  const first = queuedRunFixture(1, {requestedSources: ['website']});
+  const second = queuedRunFixture(2, {requestedSources: ['website']});
+  const {client, claimIds} = queueClient({
+    queuedRuns: [second.run, first.run],
+    tasks: [first.task, second.task],
+    claimWins: (_runId, attempt) => attempt > 0,
+  });
+
+  const result = await claimNextResearchRun(
+    client,
+    {
+      workerId: 'racing-worker',
+      availableSources: ['website'],
+    },
+    {now: () => claimedAt, pageSize: 1},
+  );
+
+  assert.equal(result.claimed, true);
+  assert.equal(result.run.id, second.run.id);
+  assert.deepEqual(claimIds, [first.run.id, second.run.id]);
 });
 
 test('fails a malformed queued request before it can be claimed', async () => {
