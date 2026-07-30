@@ -4,6 +4,7 @@ import {
   assertSafeCcsFeedSnapshot,
   canonicalCcsSiteId,
   isExplicitlyEnabled,
+  staleCcsSyncCutoff,
 } from './sync-safety.js';
 
 test('requires an explicit true value before automatic Attio sync', () => {
@@ -11,6 +12,17 @@ test('requires an explicit true value before automatic Attio sync', () => {
   assert.equal(isExplicitlyEnabled(' TRUE '), true);
   assert.equal(isExplicitlyEnabled('1'), false);
   assert.equal(isExplicitlyEnabled(undefined), false);
+});
+
+test('expires a crashed CCS sync claim after the bounded lease', () => {
+  assert.equal(
+    staleCcsSyncCutoff('2026-07-30T20:00:00Z', 30),
+    '2026-07-30T19:30:00.000Z',
+  );
+  assert.throws(
+    () => staleCcsSyncCutoff('invalid', 30),
+    /valid time/,
+  );
 });
 
 test('normalises SiteFinder IDs to the canonical numeric CCS value', () => {

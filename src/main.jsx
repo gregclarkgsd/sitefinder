@@ -1,16 +1,22 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Search, MapPin, Map as MapIcon, LocateFixed, MoreHorizontal, ArrowUp, ArrowDown, ArrowUpDown, Star, StickyNote, ExternalLink, X, RefreshCw, Building2, SlidersHorizontal, Phone, Mail, CalendarDays, Bookmark, BarChart3, Users, FolderKanban, ChevronLeft, ChevronRight, CheckSquare, Circle, CheckCircle2, Trash2, Plus, Megaphone, Bot } from 'lucide-react';
+import { Search, MapPin, Map as MapIcon, LocateFixed, MoreHorizontal, ArrowUp, ArrowDown, ArrowUpDown, Star, StickyNote, ExternalLink, X, RefreshCw, Building2, SlidersHorizontal, Phone, Mail, CalendarDays, Bookmark, BarChart3, Users, FolderKanban, ChevronLeft, ChevronRight, CheckSquare, Circle, CheckCircle2, Trash2, Plus, Megaphone, Bot, Inbox } from 'lucide-react';
 import './styles.css';
 import './mobile.css';
 import AuthGate from './AuthGate';
 import { CommunicationTimeline, OutreachPage } from './Outreach';
 import { ResearchAgentPage } from './ResearchAgent';
+import { OpportunityInbox } from './OpportunityInbox';
 import { canSendInitial } from './outreachState';
 import { apiFetch } from './api';
 import { supabase } from './supabase';
 import { projectIdFromSearch, projectSearchUrl } from './projectLinks';
 import { hasCurrentAttioLink, needsProjectClassification } from './projectStatus';
+import {
+  correctPipelineContactChanges,
+  mergeOpportunityProjects,
+  normaliseTrackingChanges,
+} from './opportunityState';
 import { postcodeFromAddress } from '../supabase/functions/_shared/project-enrichment.js';
 
 const ProjectMap = lazy(() => import('./ProjectMap'));
@@ -18,6 +24,7 @@ const API = '/api';
 const PAGE_SIZE = 30;
 const NEW_DAYS = 7;
 const STAGES = ['new','reviewing','contacted','quoting','won','lost'];
+const SECONDARY_NAV_IDS = ['outreach','research','insights','contractors'];
 const fallback = [
   {Id:'site520666',Name:'Ladywell Park Gardens',MainContractor:'Higgins Partnerships',Client:'Louise Hunt',LaId:'London Borough of Lewisham',Latitude:51.4567,Longitude:-0.0132},
   {Id:'site518253',Name:'22 Hill Street',MainContractor:'Overbury plc',Client:'Berkeley Estate Asset Management',LaId:'Westminster City Council',Latitude:51.5088,Longitude:-0.1486},
@@ -69,18 +76,32 @@ const matchesCompletionWindow = (dateValue, window) => {
   if(window==='past')return date<today;
   return true;
 };
-const fetchAllRows = async (table, columns, pageSize=1000, filterQuery=query=>query) => {
+const fetchAllRows = async (table, columns, {
+  pageSize=1000,
+  filterQuery=query=>query,
+  orderColumn='id',
+}={}) => {
   const rows = [];
-  for (let from = 0; ; from += pageSize) {
-    const query=filterQuery(supabase.from(table).select(columns));
-    const {data,error} = await query.range(from,from+pageSize-1);
+  let lastKey = null;
+  for (;;) {
+    let query=filterQuery(supabase.from(table).select(columns))
+      .order(orderColumn,{ascending:true})
+      .limit(pageSize);
+    if(lastKey!==null)query=query.gt(orderColumn,lastKey);
+    const {data,error} = await query;
     if (error) return {data:null,error};
-    rows.push(...(data||[]));
+    const page=data||[];
+    if(page.some(row=>row[orderColumn]===null||row[orderColumn]===undefined)){
+      return {data:null,error:new Error(`${table}.${orderColumn} cannot be empty during evidence pagination`)};
+    }
+    rows.push(...page);
+    lastKey=page.at(-1)?.[orderColumn]??lastKey;
     if (!data || data.length < pageSize) return {data:rows,error:null};
   }
 };
 const navItems = [
   {id:'projects',label:'Projects',icon:FolderKanban},
+  {id:'opportunities',label:'Opportunities',icon:Inbox},
   {id:'map',label:'Map',icon:MapIcon},
   {id:'saved',label:'Saved',icon:Bookmark},
   {id:'tasks',label:'Tasks',icon:CheckSquare},
@@ -103,12 +124,16 @@ function SelectFilter({label,value,onChange,options,allLabel}) {
 }
 
 function App({session,cloudEnabled}){
+  const opportunityCheckpointStorageKey=cloudEnabled&&session?.user?.id?`gsd-opportunity-checkpoint:${session.user.id}`:'gsd-opportunity-checkpoint:local';
   const [projects,setProjects]=useState([]), [query,setQuery]=useState(''), [selected,setSelected]=useState(null), [detail,setDetail]=useState(null);
   const [loading,setLoading]=useState(true), [error,setError]=useState(''), [activeView,setActiveView]=useState(()=>new URLSearchParams(window.location.search).get('view')||'projects'), [page,setPage]=useState(1);
   const [mapFitRequest,setMapFitRequest]=useState(0);
   const [mobileMoreOpen,setMobileMoreOpen]=useState(false);
   const [saved,setSaved]=useState(()=>new Set(JSON.parse(localStorage.getItem('gsd-saved')||'[]'))), [notes,setNotes]=useState(()=>JSON.parse(localStorage.getItem('gsd-notes')||'{}'));
   const [history,setHistory]=useState({}), [syncStatus,setSyncStatus]=useState(null), [tracking,setTracking]=useState({});
+  const [opportunityCheckpoint,setOpportunityCheckpoint]=useState(()=>localStorage.getItem(opportunityCheckpointStorageKey)||null);
+  const [opportunityEvidenceLoading,setOpportunityEvidenceLoading]=useState(cloudEnabled), [opportunityEvidenceError,setOpportunityEvidenceError]=useState('');
+  const [opportunityRefreshNonce,setOpportunityRefreshNonce]=useState(0), [opportunityLastRefreshedAt,setOpportunityLastRefreshedAt]=useState(null);
   const [attioLinks,setAttioLinks]=useState({}), [enrichment,setEnrichment]=useState({});
   const [tasks,setTasks]=useState([]);
   const [outreachLeads,setOutreachLeads]=useState(()=>cloudEnabled?[]:demoOutreachLeads), [communications,setCommunications]=useState([]), [suppressions,setSuppressions]=useState([]);
@@ -116,22 +141,66 @@ function App({session,cloudEnabled}){
   const [mailboxes,setMailboxes]=useState([]), [mailboxesLoading,setMailboxesLoading]=useState(cloudEnabled), [mailboxError,setMailboxError]=useState('');
   const [draftFilters,setDraftFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true}), [filters,setFilters]=useState({location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true});
   const draftFiltersRef=useRef(draftFilters);
+  const opportunityEvidenceGenerationRef=useRef(0);
+  const opportunityRefreshWaitersRef=useRef([]);
+  const refreshOpportunityEvidence=useCallback(()=>{
+    if(!cloudEnabled){
+      const cutoff=new Date().toISOString();
+      setOpportunityLastRefreshedAt(cutoff);
+      return Promise.resolve(cutoff);
+    }
+    return new Promise(resolve=>{
+      opportunityRefreshWaitersRef.current.push(resolve);
+      setOpportunityRefreshNonce(value=>value+1);
+    });
+  },[cloudEnabled]);
 
   const load=()=>{setLoading(true);setError('');apiFetch(`${API}/projects`,{cache:'no-store'}).then(async r=>{if(!r.ok) throw new Error((await r.json()).error||'Unable to load CCS projects');return r.json()}).then(d=>setProjects(d.projects||fallback)).catch(err=>{setProjects(fallback);setError(`${err.message}. Showing cached examples.`)}).finally(()=>setLoading(false))};
   useEffect(load,[]);
-  useEffect(()=>{ if(!cloudEnabled) return; Promise.all([
-    supabase.from('saved_projects').select('project_id'),
-    supabase.from('project_notes').select('project_id,note'),
-    fetchAllRows('ccs_projects','project_id,first_seen_at,last_seen_at,last_changed_at,discovered_after_baseline,is_active,site_start_date,site_end_date,site_closed,address,site_manager_name,site_manager_job_title,site_manager_phone,marker_email,last_visit_date,detail_last_checked_at'),
-    supabase.from('ccs_sync_runs').select('completed_at,total_projects,new_projects,changed_projects,detail_projects,detail_errors,status').eq('status','completed').order('completed_at',{ascending:false}).limit(1).maybeSingle(),
-    supabase.from('lead_tracking').select('project_id,stage,assigned_email,next_action,next_action_at,updated_at'),
-    supabase.from('project_tasks').select('*').order('completed',{ascending:true}).order('due_date',{ascending:true,nullsFirst:false}).order('created_at',{ascending:false}),
-    fetchAllRows('outreach_leads','*'),
-    fetchAllRows('outreach_communications','*'),
-    fetchAllRows('outreach_suppressions','*'),
-    fetchAllRows('attio_sync_links','project_id,attio_record_id,attio_web_url,sync_status,sync_error,synced_at',1000,query=>query.eq('entity_type','project')),
-    fetchAllRows('ccs_project_enrichment','*')
-  ]).then(([s,n,h,sync,t,taskRows,outreachRows,communicationRows,suppressionRows,attioRows,enrichmentRows])=>{if(s.data)setSaved(new Set(s.data.map(x=>x.project_id)));if(n.data)setNotes(Object.fromEntries(n.data.map(x=>[x.project_id,x.note])));if(h.data)setHistory(Object.fromEntries(h.data.map(x=>[x.project_id,x])));if(sync.data)setSyncStatus(sync.data);if(t.data)setTracking(Object.fromEntries(t.data.map(x=>[x.project_id,x])));if(taskRows.data)setTasks(taskRows.data);if(outreachRows.data)setOutreachLeads(outreachRows.data);if(communicationRows.data)setCommunications(communicationRows.data);if(suppressionRows.data)setSuppressions(suppressionRows.data);if(attioRows.data)setAttioLinks(Object.fromEntries(attioRows.data.filter(x=>x.project_id).map(x=>[x.project_id,x])));if(enrichmentRows.data)setEnrichment(Object.fromEntries(enrichmentRows.data.map(x=>[x.project_id,x])))}) },[cloudEnabled]);
+  useEffect(()=>{
+    if(!cloudEnabled)return;
+    const generation=++opportunityEvidenceGenerationRef.current;
+    let safeCutoff=null;
+    setOpportunityEvidenceLoading(true);
+    setOpportunityEvidenceError('');
+    (async()=>{
+      const cutoffResult=await supabase.rpc('capture_opportunity_evidence_cutoff');
+      if(cutoffResult.error||!cutoffResult.data)throw new Error(cutoffResult.error?.message||'Could not capture the evidence cutoff');
+      const cutoff=cutoffResult.data;
+      const [s,n,h,sync,t,taskRows,outreachRows,communicationRows,suppressionRows,attioRows,enrichmentRows,cursor]=await Promise.all([
+        supabase.from('saved_projects').select('project_id'),
+        supabase.from('project_notes').select('project_id,note'),
+        fetchAllRows('ccs_projects','project_id,project_name,main_contractor,client,local_authority,latitude,longitude,first_seen_at,last_seen_at,last_changed_at,last_changed_fields,discovered_after_baseline,is_active,site_start_date,site_end_date,site_closed,address,site_manager_name,site_manager_job_title,site_manager_phone,marker_email,last_visit_date,detail_last_checked_at',{orderColumn:'project_id'}),
+        supabase.from('ccs_sync_runs').select('started_at,completed_at,total_projects,new_projects,changed_projects,detail_projects,detail_errors,status').eq('status','completed').order('completed_at',{ascending:false}).limit(1).maybeSingle(),
+        fetchAllRows('lead_tracking','project_id,stage,assigned_email,next_action,next_action_at,triage_status,reviewed_at,contacted_at,contacted_source,snoozed_until,review_note,triage_updated_by,updated_at',{orderColumn:'project_id'}),
+        supabase.from('project_tasks').select('*').order('completed',{ascending:true}).order('due_date',{ascending:true,nullsFirst:false}).order('created_at',{ascending:false}),
+        fetchAllRows('outreach_leads','*',{orderColumn:'id'}),
+        fetchAllRows('outreach_communications','*',{orderColumn:'id'}),
+        fetchAllRows('outreach_suppressions','*',{orderColumn:'id'}),
+        fetchAllRows('attio_sync_links','id,project_id,attio_record_id,attio_web_url,sync_status,sync_error,synced_at',{orderColumn:'id',filterQuery:query=>query.eq('entity_type','project')}),
+        fetchAllRows('ccs_project_enrichment','*',{orderColumn:'project_id'}),
+        supabase.from('opportunity_inbox_cursors').select('last_checkpoint_at').eq('user_id',session.user.id).maybeSingle(),
+      ]);
+      const crossingSyncs=await supabase.from('ccs_sync_runs').select('started_at,completed_at,status').lte('started_at',cutoff).order('started_at',{ascending:false}).limit(20);
+      const crossedBySync=Boolean(crossingSyncs.data?.some(run=>(
+        run.status==='running'
+        || new Date(run.completed_at).getTime()>new Date(cutoff).getTime()
+      )));
+      const evidenceFailure=[h,t,outreachRows,communicationRows,crossingSyncs].find(result=>result.error);
+      if(generation!==opportunityEvidenceGenerationRef.current)return;
+      if(evidenceFailure)setOpportunityEvidenceError(`Opportunity evidence could not be loaded: ${evidenceFailure.error.message}`);
+      else if(crossedBySync)setOpportunityEvidenceError('A CCS sync crossed this refresh. Refresh once more before reviewing or setting a checkpoint.');
+      if(s.data)setSaved(new Set(s.data.map(x=>x.project_id)));if(n.data)setNotes(Object.fromEntries(n.data.map(x=>[x.project_id,x.note])));if(h.data)setHistory(Object.fromEntries(h.data.map(x=>[x.project_id,x])));if(sync.data)setSyncStatus(sync.data);if(t.data)setTracking(Object.fromEntries(t.data.map(x=>[x.project_id,x])));if(taskRows.data)setTasks(taskRows.data);if(outreachRows.data)setOutreachLeads(outreachRows.data);if(communicationRows.data)setCommunications(communicationRows.data);if(suppressionRows.data)setSuppressions(suppressionRows.data);if(attioRows.data)setAttioLinks(Object.fromEntries(attioRows.data.filter(x=>x.project_id).map(x=>[x.project_id,x])));if(enrichmentRows.data)setEnrichment(Object.fromEntries(enrichmentRows.data.map(x=>[x.project_id,x])));if(!cursor.error){const checkpoint=cursor.data?.last_checkpoint_at||null;setOpportunityCheckpoint(checkpoint);if(checkpoint)localStorage.setItem(opportunityCheckpointStorageKey,checkpoint);else localStorage.removeItem(opportunityCheckpointStorageKey)}
+      if(!evidenceFailure&&!crossedBySync){safeCutoff=cutoff;setOpportunityLastRefreshedAt(cutoff)}
+    })().catch(loadError=>{
+      if(generation===opportunityEvidenceGenerationRef.current)setOpportunityEvidenceError(`Opportunity evidence could not be loaded: ${loadError.message}`);
+    }).finally(()=>{
+      if(generation!==opportunityEvidenceGenerationRef.current)return;
+      setOpportunityEvidenceLoading(false);
+      const waiters=opportunityRefreshWaitersRef.current.splice(0);
+      waiters.forEach(resolve=>resolve(safeCutoff));
+    });
+  },[cloudEnabled,session?.user?.id,opportunityCheckpointStorageKey,opportunityRefreshNonce]);
   useEffect(()=>setPage(1),[query,filters,activeView]);
   const loadMailboxes=useCallback(async()=>{
     if(!cloudEnabled){setMailboxesLoading(false);return}
@@ -183,6 +252,7 @@ function App({session,cloudEnabled}){
   const totalPages=Math.max(1,Math.ceil(visibleProjects.length/PAGE_SIZE));
   const shown=visibleProjects.slice((page-1)*PAGE_SIZE,page*PAGE_SIZE);
   const contractorStats=useMemo(()=>Object.values(projects.reduce((acc,p)=>{const name=value(p.MainContractor,'Unknown contractor');if(!acc[name])acc[name]={name,count:0,locations:new Set(),saved:0};acc[name].count++;if(p.LaId)acc[name].locations.add(p.LaId);if(saved.has(p.Id))acc[name].saved++;return acc},{})).sort((a,b)=>b.count-a.count),[projects,saved]);
+  const opportunityProjects=useMemo(()=>mergeOpportunityProjects(projects,history),[history,projects]);
   const syncIsStale=syncStatus&&Date.now()-new Date(syncStatus.completed_at).getTime()>36*60*60*1000;
 
   const open=useCallback(async (p,{updateUrl=true}={})=>{setSelected(p);setDetail(null);if(updateUrl)window.history.replaceState({},'',projectSearchUrl(window.location,p.Id));try{const r=await apiFetch(`${API}/projects/${p.Id}`);if(!r.ok)throw new Error('Detail unavailable');setDetail(await r.json())}catch{setDetail({...p,Address:p.LaId,SourceUrl:`https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails/${p.Id.replace('site','')}/null`})}},[]);
@@ -202,13 +272,48 @@ function App({session,cloudEnabled}){
   useEffect(()=>{
     const linkedId=projectIdFromSearch(window.location.search);
     if(!linkedId||!projects.length||selected?.Id===linkedId)return;
-    const linkedProject=projects.find(project=>project.Id===linkedId);
+    const linkedProject=opportunityProjects.find(project=>project.Id===linkedId);
     if(linkedProject){setActiveView('projects');open(linkedProject,{updateUrl:false})}
     else setError(`Project ${linkedId.replace('site','')} is not in the current SiteFinder feed.`);
-  },[projects,selected?.Id,open]);
+  },[open,opportunityProjects,selected?.Id]);
   const toggleSave=async p=>{const wasSaved=saved.has(p.Id),next=new Set(saved);wasSaved?next.delete(p.Id):next.add(p.Id);setSaved(next);localStorage.setItem('gsd-saved',JSON.stringify([...next]));if(cloudEnabled){const result=wasSaved?await supabase.from('saved_projects').delete().eq('project_id',p.Id):await supabase.from('saved_projects').upsert({project_id:p.Id,project_name:p.Name,saved_by:session.user.id});if(result.error){setSaved(saved);setError(`Could not update saved projects: ${result.error.message}`)}}};
   const addNote=async p=>{const note=window.prompt('Shared project note',notes[p.Id]||'');if(note===null)return;const next={...notes};note.trim()?next[p.Id]=note.trim():delete next[p.Id];setNotes(next);localStorage.setItem('gsd-notes',JSON.stringify(next));if(cloudEnabled){const result=note.trim()?await supabase.from('project_notes').upsert({project_id:p.Id,project_name:p.Name,note:note.trim(),updated_by:session.user.id,updated_at:new Date().toISOString()}):await supabase.from('project_notes').delete().eq('project_id',p.Id);if(result.error)setError(`Could not update note: ${result.error.message}`)}};
-  const updateTracking=async(p,changes)=>{const next={...(tracking[p.Id]||{}),project_id:p.Id,...changes,updated_at:new Date().toISOString()};setTracking(x=>({...x,[p.Id]:next}));if(cloudEnabled){const {error:trackingError}=await supabase.from('lead_tracking').upsert({...next,updated_by:session.user.id});if(trackingError){setError(`Could not update lead: ${trackingError.message}`);return false}}return true};
+  const updateTracking=async(p,changes)=>{
+    const previous=tracking[p.Id]||{}, now=new Date(), normalizedChanges=normaliseTrackingChanges(previous,changes,now), isTriageChange=['triage_status','reviewed_at','contacted_at','contacted_source','snoozed_until','review_note'].some(key=>Object.hasOwn(normalizedChanges,key));
+    const next={...previous,project_id:p.Id,...normalizedChanges,...(isTriageChange&&cloudEnabled?{triage_updated_by:session.user.id}:{}),updated_at:now.toISOString()};
+    setTracking(x=>({...x,[p.Id]:next}));
+    if(cloudEnabled){
+      const payload={project_id:p.Id,...normalizedChanges,updated_at:next.updated_at,updated_by:session.user.id,...(isTriageChange?{triage_updated_by:session.user.id}:{})};
+      const columns='project_id,stage,assigned_email,next_action,next_action_at,triage_status,reviewed_at,contacted_at,contacted_source,snoozed_until,review_note,triage_updated_by,updated_at';
+      const result=previous.project_id&&previous.updated_at
+        ? await supabase.from('lead_tracking').update(payload).eq('project_id',p.Id).eq('updated_at',previous.updated_at).select(columns).maybeSingle()
+        : await supabase.from('lead_tracking').insert(payload).select(columns).single();
+      const {data:persisted,error:trackingError}=result;
+      if(trackingError){setTracking(current=>{const rollback={...current};if(Object.keys(previous).length)rollback[p.Id]=previous;else delete rollback[p.Id];return rollback});setError(`Could not update lead: ${trackingError.message}`);return false}
+      if(!persisted){
+        const {data:latest,error:latestError}=await supabase.from('lead_tracking').select(columns).eq('project_id',p.Id).maybeSingle();
+        if(latest){
+          setTracking(current=>({...current,[p.Id]:latest}));
+          setError(`${p.Name} was changed by another teammate. Their newer decision has been loaded; review it before trying again.`);
+        }else{
+          setTracking(current=>{const rollback={...current};if(Object.keys(previous).length)rollback[p.Id]=previous;else delete rollback[p.Id];return rollback});
+          setError(`SiteFinder detected a teammate conflict for ${p.Name}, but could not load the newer decision${latestError?`: ${latestError.message}`:''}. Refresh before trying again.`);
+        }
+        return false;
+      }
+      setTracking(current=>({...current,[p.Id]:persisted}));
+    }
+    return true
+  };
+  const setOpportunityCheckpointNow=async()=>{
+    if(syncIsStale){setError('The Opportunity Inbox checkpoint cannot be advanced while the CCS sync is stale. Refresh the feed first.');return false}
+    const cutoff=await refreshOpportunityEvidence();
+    if(!cutoff){setError('The evidence refresh did not produce a safe checkpoint. Refresh again after the CCS sync finishes.');return false}
+    const previous=opportunityCheckpoint;
+    setOpportunityCheckpoint(cutoff);localStorage.setItem(opportunityCheckpointStorageKey,cutoff);
+    if(cloudEnabled){const {data:persisted,error:cursorError}=await supabase.from('opportunity_inbox_cursors').upsert({user_id:session.user.id,last_checkpoint_at:cutoff,updated_at:cutoff}).select('last_checkpoint_at').single();if(cursorError){setOpportunityCheckpoint(previous);if(previous)localStorage.setItem(opportunityCheckpointStorageKey,previous);else localStorage.removeItem(opportunityCheckpointStorageKey);setError(`Could not save your Opportunity Inbox checkpoint: ${cursorError.message}`);return false}setOpportunityCheckpoint(persisted.last_checkpoint_at);localStorage.setItem(opportunityCheckpointStorageKey,persisted.last_checkpoint_at)}
+    return true
+  };
   const createTask=async(p,input)=>{const optimistic={id:crypto.randomUUID(),project_id:p.Id,project_name:p.Name,title:input.title.trim(),assigned_email:input.assigned_email.trim()||null,due_date:input.due_date||null,completed:false,created_at:new Date().toISOString()};if(!optimistic.title)return false;setTasks(current=>[optimistic,...current]);if(cloudEnabled){const {data,error:taskError}=await supabase.from('project_tasks').insert({...optimistic,created_by:session.user.id,updated_by:session.user.id}).select().single();if(taskError){setTasks(current=>current.filter(task=>task.id!==optimistic.id));setError(`Could not create task: ${taskError.message}`);return false}setTasks(current=>current.map(task=>task.id===optimistic.id?data:task))}return true};
   const toggleTask=async task=>{const changes={completed:!task.completed,completed_at:task.completed?null:new Date().toISOString(),updated_at:new Date().toISOString()};setTasks(current=>current.map(item=>item.id===task.id?{...item,...changes}:item));if(cloudEnabled){const {error:taskError}=await supabase.from('project_tasks').update({...changes,updated_by:session.user.id}).eq('id',task.id);if(taskError){setTasks(current=>current.map(item=>item.id===task.id?task:item));setError(`Could not update task: ${taskError.message}`)}}};
   const deleteTask=async task=>{setTasks(current=>current.filter(item=>item.id!==task.id));if(cloudEnabled){const {error:taskError}=await supabase.from('project_tasks').delete().eq('id',task.id);if(taskError){setTasks(current=>[task,...current]);setError(`Could not delete task: ${taskError.message}`)}}};
@@ -275,7 +380,7 @@ function App({session,cloudEnabled}){
     const label=channel==='phone'?'Call notes':'Communication note', body=window.prompt(label,'');
     if(body===null||!body.trim())return false;
     const lead=outreachLeads.find(item=>item.project_id===p.Id);
-    const row={id:crypto.randomUUID(),project_id:p.Id,outreach_lead_id:lead?.id||null,direction:'internal',channel,status:'logged',subject:channel==='phone'?'Call logged':'Note added',body:body.trim(),occurred_at:new Date().toISOString(),created_at:new Date().toISOString()};
+    const row={id:crypto.randomUUID(),project_id:p.Id,outreach_lead_id:lead?.id||null,direction:channel==='phone'?'outbound':'internal',channel,status:'logged',subject:channel==='phone'?'Call attempt logged':'Note added',body:body.trim(),occurred_at:new Date().toISOString(),created_at:new Date().toISOString()};
     setCommunications(current=>[row,...current]);
     if(cloudEnabled){const {data,error:communicationError}=await supabase.from('outreach_communications').insert({...row,created_by:session.user.id}).select().single();if(communicationError){setCommunications(current=>current.filter(item=>item.id!==row.id));setError(`Could not record communication: ${communicationError.message}`);return false}setCommunications(current=>current.map(item=>item.id===row.id?data:item))}
     return true
@@ -284,7 +389,7 @@ function App({session,cloudEnabled}){
   const applyFilters=()=>setFilters({...draftFiltersRef.current});
   const clearFilters=()=>{const empty={location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true};draftFiltersRef.current=empty;setDraftFilters(empty);setFilters(empty);setQuery('')};
   return <div className="app">
-    <header><div className="brand"><Building2/><b>GSD</b> SiteFinder</div><nav aria-label="Primary navigation">{navItems.map(({id,label,icon:Icon})=><button key={id} aria-current={activeView===id?'page':undefined} className={`${activeView===id?'active':''} ${['outreach','insights','contractors'].includes(id)?'secondary-nav':''}`} onClick={()=>goToView(id)}><Icon size={16}/>{label}{id==='saved'&&saved.size>0&&<span>{saved.size}</span>}</button>)}<button className={`more-nav ${mobileMoreOpen||['outreach','insights','contractors'].includes(activeView)?'active':''}`} aria-expanded={mobileMoreOpen} aria-controls="mobile-more-menu" aria-current={['outreach','insights','contractors'].includes(activeView)?'page':undefined} onClick={()=>setMobileMoreOpen(value=>!value)}><MoreHorizontal size={18}/>More</button></nav><button className="user" onClick={()=>cloudEnabled&&supabase.auth.signOut()} title={cloudEnabled?'Sign out':'Local preview'}>{session?.user?.email?.slice(0,2).toUpperCase()||'GC'}</button>{mobileMoreOpen&&<div className="mobile-more-menu" id="mobile-more-menu">{navItems.filter(item=>['outreach','insights','contractors'].includes(item.id)).map(({id,label,icon:Icon})=><button key={id} aria-current={activeView===id?'page':undefined} onClick={()=>goToView(id)}><Icon size={17}/>{label}</button>)}</div>}</header>
+    <header><div className="brand"><Building2/><b>GSD</b> SiteFinder</div><nav aria-label="Primary navigation">{navItems.map(({id,label,icon:Icon})=><button key={id} aria-current={activeView===id?'page':undefined} className={`${activeView===id?'active':''} ${SECONDARY_NAV_IDS.includes(id)?'secondary-nav':''}`} onClick={()=>goToView(id)}><Icon size={16}/>{label}{id==='saved'&&saved.size>0&&<span>{saved.size}</span>}</button>)}<button className={`more-nav ${mobileMoreOpen||SECONDARY_NAV_IDS.includes(activeView)?'active':''}`} aria-expanded={mobileMoreOpen} aria-controls="mobile-more-menu" aria-current={SECONDARY_NAV_IDS.includes(activeView)?'page':undefined} onClick={()=>setMobileMoreOpen(value=>!value)}><MoreHorizontal size={18}/>More</button></nav><button className="user" onClick={()=>cloudEnabled&&supabase.auth.signOut()} title={cloudEnabled?'Sign out':'Local preview'}>{session?.user?.email?.slice(0,2).toUpperCase()||'GC'}</button>{mobileMoreOpen&&<div className="mobile-more-menu" id="mobile-more-menu">{navItems.filter(item=>SECONDARY_NAV_IDS.includes(item.id)).map(({id,label,icon:Icon})=><button key={id} aria-current={activeView===id?'page':undefined} onClick={()=>goToView(id)}><Icon size={17}/>{label}</button>)}</div>}</header>
     {(activeView==='projects'||activeView==='saved'||activeView==='map')&&<aside><div className="aside-title"><b>Filters</b><button onClick={clearFilters}>Clear all</button></div>
       <SelectFilter label="Location" value={draftFilters.location} onChange={location=>updateDraftFilter('location',location)} options={options.locations} allLabel="All locations"/>
       <SelectFilter label="Lead activity" value={draftFilters.recency} onChange={recency=>updateDraftFilter('recency',recency)} options={['new','updated']} allLabel="All project activity"/>
@@ -295,7 +400,7 @@ function App({session,cloudEnabled}){
       <SelectFilter label="Client" value={draftFilters.client} onChange={client=>updateDraftFilter('client',client)} options={options.clients} allLabel="All clients"/>
       <button className="apply" onClick={applyFilters}><SlidersHorizontal size={16}/> Apply filters</button>
     </aside>}
-    <main className={`${(activeView==='insights'||activeView==='contractors'||activeView==='tasks'||activeView==='outreach'||activeView==='research')?'wide':''} ${activeView==='map'?'map-main':''}`}>
+    <main className={`${(activeView==='opportunities'||activeView==='insights'||activeView==='contractors'||activeView==='tasks'||activeView==='outreach'||activeView==='research')?'wide':''} ${activeView==='map'?'map-main':''}`}>
       {(activeView==='projects'||activeView==='saved')&&<><section className="toolbar"><div><strong>{visibleProjects.length.toLocaleString()} {activeView==='saved'?'saved':'active'} projects</strong><button className="icon" onClick={load} aria-label="Refresh projects"><RefreshCw size={16}/></button></div><label className="search"><Search size={18}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search projects, contractors, clients, locations…" aria-label="Search projects"/></label><button className="filter-mobile" onClick={()=>document.querySelector('aside')?.classList.toggle('open')}><SlidersHorizontal size={17}/> Filters</button></section>
         {error&&<div className="notice" role="alert">{error}<button onClick={()=>setError('')}><X size={15}/></button></div>}
         {syncIsStale&&<div className="notice sync-warning" role="alert">CCS data may be out of date. The last successful nightly sync was {new Date(syncStatus.completed_at).toLocaleString('en-GB')}.</div>}
@@ -306,6 +411,7 @@ function App({session,cloudEnabled}){
         {error&&<div className="notice" role="alert">{error}<button onClick={()=>setError('')}><X size={15}/></button></div>}
         <Suspense fallback={<div className="map-loading">Loading project map…</div>}><ProjectMap projects={filtered} selected={selected} saved={saved} history={history} onSelect={open} fitRequest={mapFitRequest}/></Suspense>
       </>}
+      {activeView==='opportunities'&&<OpportunityInbox projects={opportunityProjects} history={history} tracking={tracking} outreachLeads={outreachLeads} communications={communications} enrichment={enrichment} attioLinks={attioLinks} loading={loading||opportunityEvidenceLoading} evidenceError={opportunityEvidenceError} actionError={error} onClearError={()=>setError('')} syncIsStale={Boolean(syncIsStale)} lastSyncedAt={syncStatus?.completed_at} checkpointAt={opportunityCheckpoint} lastRefreshedAt={opportunityLastRefreshedAt} onSetCheckpoint={setOpportunityCheckpointNow} onRefresh={refreshOpportunityEvidence} onUpdateTracking={updateTracking} onOpenProject={open}/>}
       {activeView==='insights'&&<Insights projects={projects} saved={saved} contractorStats={contractorStats}/>}
       {activeView==='tasks'&&<TaskDashboard tasks={tasks} projects={projects} openProject={open} toggleTask={toggleTask} deleteTask={deleteTask}/>}
       {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} mailboxes={mailboxes} mailboxesLoading={mailboxesLoading} mailboxError={mailboxError} connectMailbox={connectMailbox} updateLead={updateOutreach} approveAndSend={approveAndSendOutreach} focusProjectId={outreachFocusProjectId}/>}
@@ -429,6 +535,17 @@ function ProjectDrawer({className='',selected,detail,close,saved,toggleSave,note
   const postcode=postcodeFromAddress(address);
   const completeness=projectCompleteness(selected,meta,enrichment);
   const attioRefreshFailed=attioLink?.sync_status==='error';
+  const changeStage=nextStage=>{
+    if(
+      ['new','reviewing'].includes(nextStage)
+      && tracking.contacted_source==='pipeline_stage'
+    ){
+      if(!window.confirm(`Correct the pipeline contact mark and move this lead to ${nextStage}? Communication provider history will not be changed.`))return;
+      updateTracking(correctPipelineContactChanges(tracking,nextStage));
+      return;
+    }
+    updateTracking({stage:nextStage});
+  };
   return <div className={`drawer ${className}`} role="dialog" aria-label={`${selected.Name} project details`}>
     <div className="drawer-head"><div><h2>{selected.Name}</h2><p>CCS {selected.Id.replace('site','')}{meta&&` · First seen ${fmtDate(meta.first_seen_at)}`}</p></div><button className="icon" onClick={close} aria-label="Close project details"><X/></button></div>
     <div className="drawer-actions">
@@ -437,7 +554,7 @@ function ProjectDrawer({className='',selected,detail,close,saved,toggleSave,note
       <button onClick={queueOutreach}><Megaphone size={16}/>{outreachLead?'Open outreach':'Add to outreach'}</button>
       {attioLink?.attio_web_url&&<a className={`attio-action${attioRefreshFailed?' refresh-failed':''}`} href={attioLink.attio_web_url} target="_blank" rel="noreferrer"><ExternalLink size={16}/>{attioRefreshFailed?'Open last linked Attio record':'Open in Attio'}</a>}
     </div>
-    <section className="lead-workflow"><h3>Lead workflow</h3><label>Stage<select value={tracking.stage||'new'} onChange={e=>updateTracking({stage:e.target.value})}>{STAGES.map(stage=><option key={stage} value={stage}>{stage[0].toUpperCase()+stage.slice(1)}</option>)}</select></label><label>Next action<input key={tracking.next_action||''} defaultValue={tracking.next_action||''} placeholder="e.g. Call the site manager" onBlur={e=>updateTracking({next_action:e.target.value})}/></label><label>Follow-up date<input type="date" value={tracking.next_action_at?.slice(0,10)||''} onChange={e=>updateTracking({next_action_at:e.target.value?new Date(`${e.target.value}T09:00:00`).toISOString():null})}/></label></section>
+    <section className="lead-workflow"><h3>Lead workflow</h3><label>Stage<select value={tracking.stage||'new'} onChange={e=>changeStage(e.target.value)}>{STAGES.map(stage=><option key={stage} value={stage}>{stage[0].toUpperCase()+stage.slice(1)}</option>)}</select></label><label>Next action<input key={tracking.next_action||''} defaultValue={tracking.next_action||''} placeholder="e.g. Call the site manager" onBlur={e=>updateTracking({next_action:e.target.value})}/></label><label>Follow-up date<input type="date" value={tracking.next_action_at?.slice(0,10)||''} onChange={e=>updateTracking({next_action_at:e.target.value?new Date(`${e.target.value}T09:00:00`).toISOString():null})}/></label></section>
     <ProjectTaskList tasks={tasks} createTask={createTask} toggleTask={toggleTask} deleteTask={deleteTask}/>
     <section><div className="section-title"><h3>Communication history</h3></div><CommunicationTimeline communications={communications}/><div className="communication-actions"><button onClick={()=>logCommunication('phone')}><Phone size={15}/> Log call</button><button onClick={()=>logCommunication('note')}><StickyNote size={15}/> Add note</button></div></section>
     {!detail?<div className="drawer-loading">Loading verified project record…</div>:<>
