@@ -21,6 +21,10 @@ import {
   parseResearchReviewRequest,
   ResearchActionError,
 } from './research-agent-actions.js';
+import {
+  claimNextResearchRun,
+  parseResearchQueueClaimRequest,
+} from './research-agent-queue.js';
 
 const app = express();
 const PORT = process.env.PORT || 8787;
@@ -286,6 +290,25 @@ app.get('/api/research/runs/:runId/control', requireResearchIngestAuth, async (r
     return res.json({status: data.status});
   } catch {
     return res.status(503).json({error: 'Research control state is unavailable'});
+  }
+});
+
+app.post('/api/research/worker/claim', requireResearchIngestAuth, async (req, res) => {
+  try {
+    const input = parseResearchQueueClaimRequest(req.body);
+    const result = await claimNextResearchRun(
+      researchAdminClient,
+      input,
+    );
+    res.set('Cache-Control', 'no-store');
+    return res.json(result);
+  } catch (error) {
+    const validationFailure = error?.name === 'ZodError';
+    return res.status(validationFailure ? 400 : 503).json({
+      error: validationFailure
+        ? 'Invalid research worker claim'
+        : 'Research queue is unavailable',
+    });
   }
 });
 

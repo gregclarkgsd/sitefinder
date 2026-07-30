@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "npm run typecheck && npm test",
     "enrich": "tsx src/cli.ts enrich",
+    "queue:run": "tsx src/cli.ts run-queue",
     "reconcile": "tsx src/cli.ts reconcile",
     "snapshot:attio": "tsx src/cli.ts snapshot-attio",
     "snapshot:pipedrive": "tsx src/cli.ts snapshot-pipedrive",

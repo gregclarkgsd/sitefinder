@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SiteFinderProgressPublisher } from "../src/observability/sitefinder-progress.js";
+import {
+  SiteFinderProgressPublisher,
+  SiteFinderQueueClient,
+} from "../src/observability/sitefinder-progress.js";
 import type { CompanySeed, EnrichedCompany } from "../src/types.js";
 
 const publicLookup = (async () => [
@@ -134,6 +137,109 @@ test("publishes bounded progress without placing the credential in JSON", async 
   assert.ok(authHeaders.every(value => value === "Bearer private-test-token"));
   assert.ok(messages.some(message => (message as { type?: string }).type === "candidate.upsert"));
   assert.ok(messages.some(message => (message as { type?: string }).type === "event.append"));
+});
+
+test("claims and validates the next reviewed SiteFinder queue run", async () => {
+  let requestedUrl = "";
+  let requestedBody = "";
+  const queue = new SiteFinderQueueClient({
+    endpoint: "https://sitefinder.example/api/research/ingest",
+    token: "private-test-token",
+    lookup: publicLookup,
+    fetchImpl: async (input, init) => {
+      requestedUrl = String(input);
+      requestedBody = String(init?.body);
+      assert.equal(
+        new Headers(init?.headers).get("authorization"),
+        "Bearer private-test-token",
+      );
+      return new Response(
+        JSON.stringify({
+          claimed: true,
+          run: {
+            id: "1ad1603c-5a3f-4bf5-8e23-8b18d1414287",
+            name: "Reviewed queue run",
+            requestedSources: ["website", "apollo"],
+            apolloMaxPeople: 10,
+            procurementDays: 30,
+            companies: [
+              {
+                companyId: "company-1",
+                companyName: "Example Construction",
+                domain: "example.com",
+              },
+            ],
+          },
+        }),
+        { status: 200 },
+      );
+    },
+  });
+
+  const run = await queue.claim("worker-1");
+  assert.equal(
+    requestedUrl,
+    "https://sitefinder.example/api/research/worker/claim",
+  );
+  assert.deepEqual(JSON.parse(requestedBody), { workerId: "worker-1" });
+  assert.equal(run?.companies[0]?.companyId, "company-1");
+});
+
+test("returns no work for an empty queue and rejects malformed claims", async () => {
+  let malformed = false;
+  const queue = new SiteFinderQueueClient({
+    endpoint: "https://sitefinder.example/api/research/ingest",
+    token: "private-test-token",
+    lookup: publicLookup,
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify(
+          malformed
+            ? { claimed: true, run: { id: "not-a-uuid" } }
+            : { claimed: false },
+        ),
+        { status: 200 },
+      ),
+  });
+
+  assert.equal(await queue.claim("worker-1"), undefined);
+  malformed = true;
+  await assert.rejects(queue.claim("worker-1"));
+});
+
+test("continues a queued run with its original ID and event sequence", async () => {
+  const messages: Array<{
+    type?: string;
+    run?: { id?: string };
+    event?: { runId?: string; sequence?: number; message?: string };
+  }> = [];
+  const runId = "1ad1603c-5a3f-4bf5-8e23-8b18d1414287";
+  const publisher = new SiteFinderProgressPublisher({
+    endpoint: "https://sitefinder.example/api/research/ingest",
+    token: "private-test-token",
+    runId,
+    initialSequence: 1,
+    lookup: publicLookup,
+    fetchImpl: async (_input, init) => {
+      messages.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ accepted: true }), { status: 202 });
+    },
+  });
+
+  await publisher.start({
+    name: "Reviewed queue run",
+    source: "file",
+    companies: [company],
+    configuration: {},
+  });
+
+  assert.equal(messages[0]?.run?.id, runId);
+  assert.equal(messages.at(-1)?.event?.runId, runId);
+  assert.equal(messages.at(-1)?.event?.sequence, 1);
+  assert.match(
+    messages.at(-1)?.event?.message ?? "",
+    /started 1 queued companies/u,
+  );
 });
 
 test("publishes a policy comparison event without creating a held candidate", async () => {

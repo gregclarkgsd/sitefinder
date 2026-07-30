@@ -5,6 +5,7 @@ import { loadConfig, requireSecret, type AppConfig } from "./config.js";
 import { AttioReader } from "./crm/attio.js";
 import { PipedriveReader } from "./crm/pipedrive.js";
 import {
+  privateOutputFile,
   resolvePrivateInputFile,
   resolvePrivateOutputDirectory,
   type PrivateOutputDirectory,
@@ -19,13 +20,18 @@ import {
 import { parseCapturedCompanySeeds } from "./io/company-input.js";
 import { writeCompletionManifest } from "./io/completion-manifest.js";
 import { captureImmutableInput } from "./io/immutable-input.js";
+import { loadQueueInputManifest } from "./io/queue-input-manifest.js";
 import {
   parseCapturedAttioPeople,
   parseCapturedPipedrivePeople,
 } from "./io/people-input.js";
 import { writeEnrichmentRun } from "./io/run-output.js";
 import { verifyPeopleSnapshotInput } from "./io/verified-snapshot-input.js";
-import { SiteFinderProgressPublisher } from "./observability/sitefinder-progress.js";
+import {
+  SiteFinderProgressPublisher,
+  SiteFinderQueueClient,
+  type ClaimedResearchRun,
+} from "./observability/sitefinder-progress.js";
 import {
   enrichCompanies,
 } from "./pipeline/enrich.js";
@@ -55,12 +61,19 @@ import {
 } from "./universe/index.js";
 import type {
   AttioPersonSnapshot,
+  CompanySeed,
   PipedrivePersonSnapshot,
 } from "./types.js";
 
 interface Arguments {
   command?: string;
   flags: Map<string, string | true>;
+}
+
+interface QueueEnrichInvocation {
+  runId: string;
+  companyIds: string[];
+  progress: SiteFinderProgressPublisher;
 }
 
 function parseArguments(values: string[]): Arguments {
@@ -596,7 +609,10 @@ async function buildUniverse(args: Arguments): Promise<void> {
   );
 }
 
-async function enrich(args: Arguments): Promise<void> {
+async function enrich(
+  args: Arguments,
+  invocation?: QueueEnrichInvocation,
+): Promise<void> {
   const config = loadConfig();
   const output = await commandOutput(
     config,
@@ -635,7 +651,10 @@ async function enrich(args: Arguments): Promise<void> {
     );
   }
   const requestedId = flag(args, "company-id");
-  const pilotManifestPath = requestedId
+  if (invocation && requestedId) {
+    throw new Error("Queued research cannot override its reviewed company IDs");
+  }
+  const pilotManifestPath = requestedId || invocation
     ? undefined
     : await privateInput(output, args, "pilot-manifest", {
         required: true,
@@ -714,9 +733,29 @@ async function enrich(args: Arguments): Promise<void> {
       "Reviewed pilot manifest does not match the verified CRM people snapshots",
     );
   }
-  const requested = requestedId
-    ? allCompanies.filter((company) => company.id === requestedId)
-    : (reviewedPilot?.companies ?? []);
+  let requested: CompanySeed[];
+  if (invocation) {
+    const uniqueIds = new Set(invocation.companyIds);
+    if (uniqueIds.size !== invocation.companyIds.length) {
+      throw new Error("Queued research company IDs must be unique");
+    }
+    const companiesById = new Map(
+      allCompanies.map((company) => [company.id, company]),
+    );
+    requested = invocation.companyIds.flatMap((companyId) => {
+      const company = companiesById.get(companyId);
+      return company ? [company] : [];
+    });
+    if (requested.length !== invocation.companyIds.length) {
+      throw new Error(
+        "Queued company input does not match the reviewed company IDs",
+      );
+    }
+  } else {
+    requested = requestedId
+      ? allCompanies.filter((company) => company.id === requestedId)
+      : (reviewedPilot?.companies ?? []);
+  }
   if (requested.length === 0) throw new Error("No companies matched the run");
   if (requestedId && requested.length !== 1) {
     throw new Error(
@@ -728,6 +767,11 @@ async function enrich(args: Arguments): Promise<void> {
     cleanupDecisions,
   );
   const selected = policyPartition.allowed;
+  if (invocation && selected.length !== requested.length) {
+    throw new Error(
+      "One or more queued companies are withheld by the approved cleanup policy",
+    );
+  }
   await assertOutputDirectoryIsEmpty(output);
 
   const companiesHouse = enabled(args, "with-companies-house")
@@ -771,18 +815,20 @@ async function enrich(args: Arguments): Promise<void> {
   if (!runName || runName.length > 120) {
     throw new Error("--run-name must be between 1 and 120 characters");
   }
-  const progress = publishProgress && selected.length > 0
-    ? new SiteFinderProgressPublisher({
-        endpoint: requireSecret(
-          config.researchAgentIngestUrl,
-          "RESEARCH_AGENT_INGEST_URL",
-        ),
-        token: requireSecret(
-          config.researchAgentIngestToken,
-          "RESEARCH_AGENT_INGEST_TOKEN",
-        ),
-      })
-    : undefined;
+  const progress =
+    publishProgress && selected.length > 0
+      ? invocation?.progress ??
+        new SiteFinderProgressPublisher({
+          endpoint: requireSecret(
+            config.researchAgentIngestUrl,
+            "RESEARCH_AGENT_INGEST_URL",
+          ),
+          token: requireSecret(
+            config.researchAgentIngestToken,
+            "RESEARCH_AGENT_INGEST_TOKEN",
+          ),
+        })
+      : undefined;
 
   await withOutputLock(output, async () => {
     try {
@@ -806,7 +852,11 @@ async function enrich(args: Arguments): Promise<void> {
           pipedrivePeopleSha256: pipedrivePeopleInput.sha256,
           attioPeopleCount: attioPeople.length,
           pipedrivePeopleCount: pipedrivePeople.length,
-          selectionMode: requestedId ? "single_company" : "reviewed_pilot",
+          selectionMode: invocation
+            ? "sitefinder_queue"
+            : requestedId
+              ? "single_company"
+              : "reviewed_pilot",
           ...(pilotManifestInput
             ? {
                 pilotManifestSha256: pilotManifestInput.sha256,
@@ -872,7 +922,13 @@ async function enrich(args: Arguments): Promise<void> {
             people: pipedrivePeople.length,
           },
         },
-        selection: requestedId
+        selection: invocation
+          ? {
+              mode: "sitefinder_queue",
+              runId: invocation.runId,
+              companyIds: invocation.companyIds,
+            }
+          : requestedId
           ? {
               mode: "single_company",
               companyId: requestedId,
@@ -958,10 +1014,177 @@ async function enrich(args: Arguments): Promise<void> {
         }),
       );
     } catch (error) {
-      await progress?.fail(error);
+      if (!invocation) await progress?.fail(error);
       throw error;
     }
   });
+}
+
+function queueArguments(
+  run: ClaimedResearchRun,
+  inputPath: string,
+  inputs: Awaited<ReturnType<typeof loadQueueInputManifest>>,
+): Arguments {
+  const flags = new Map<string, string | true>([
+    ["input", inputPath],
+    ["output", `queue-runs/${run.id}`],
+    ["cleanup-decisions", inputs.cleanupDecisions],
+    ["cleanup-manifest", inputs.cleanupManifest],
+    ["attio-people", inputs.attioPeople],
+    ["attio-snapshot-manifest", inputs.attioSnapshotManifest],
+    ["pipedrive-people", inputs.pipedrivePeople],
+    ["pipedrive-snapshot-manifest", inputs.pipedriveSnapshotManifest],
+    ["publish-progress", true],
+    ["run-name", run.name],
+    ["concurrency", "1"],
+    ["apollo-max-people", String(run.apolloMaxPeople)],
+    [
+      "procurement-days",
+      run.requestedSources.includes("procurement")
+        ? String(run.procurementDays)
+        : "0",
+    ],
+  ]);
+  if (run.requestedSources.includes("apollo")) {
+    flags.set("with-apollo", true);
+  }
+  if (run.requestedSources.includes("companiesHouse")) {
+    flags.set("with-companies-house", true);
+  }
+  return { command: "enrich", flags };
+}
+
+async function preflightQueueInputs(
+  inputs: Awaited<ReturnType<typeof loadQueueInputManifest>>,
+): Promise<void> {
+  const [
+    cleanupApproval,
+    attioPeopleInput,
+    attioManifestInput,
+    pipedrivePeopleInput,
+    pipedriveManifestInput,
+  ] = await Promise.all([
+    loadVerifiedCleanupApproval(
+      inputs.cleanupDecisions,
+      inputs.cleanupManifest,
+    ),
+    captureImmutableInput(inputs.attioPeople),
+    captureImmutableInput(inputs.attioSnapshotManifest),
+    captureImmutableInput(inputs.pipedrivePeople),
+    captureImmutableInput(inputs.pipedriveSnapshotManifest),
+  ]);
+  const attio = verifyPeopleSnapshotInput(
+    attioPeopleInput,
+    attioManifestInput,
+    "attio",
+  );
+  const pipedrive = verifyPeopleSnapshotInput(
+    pipedrivePeopleInput,
+    pipedriveManifestInput,
+    "pipedrive",
+  );
+  const attioPeople = parseCapturedAttioPeople(attio.dataInput);
+  const pipedrivePeople = parseCapturedPipedrivePeople(pipedrive.dataInput);
+  if (
+    attioPeople.length !== attio.expectedPeopleCount ||
+    pipedrivePeople.length !== pipedrive.expectedPeopleCount
+  ) {
+    throw new Error(
+      "Queue CRM people snapshots do not match their completion manifests",
+    );
+  }
+  if (
+    Date.parse(attio.completedAt) <
+    Date.parse(cleanupApproval.manifest.approvedAt)
+  ) {
+    throw new Error(
+      "Queue Attio snapshot must be captured after cleanup approval",
+    );
+  }
+}
+
+async function runQueue(): Promise<void> {
+  const config = loadConfig();
+  const endpoint = requireSecret(
+    config.researchAgentIngestUrl,
+    "RESEARCH_AGENT_INGEST_URL",
+  );
+  const token = requireSecret(
+    config.researchAgentIngestToken,
+    "RESEARCH_AGENT_INGEST_TOKEN",
+  );
+  const manifest = requireSecret(
+    config.researchQueueInputManifest,
+    "RESEARCH_QUEUE_INPUT_MANIFEST",
+  );
+  const preflightOutput = await resolvePrivateOutputDirectory({
+    privateDataDirectory: config.privateDataDirectory,
+    requestedDirectory: "queue-runs/preflight",
+  });
+  const inputs = await loadQueueInputManifest(
+    preflightOutput.rootDirectory,
+    manifest,
+  );
+  await preflightQueueInputs(inputs);
+
+  const queue = new SiteFinderQueueClient({ endpoint, token });
+  const run = await queue.claim(config.researchWorkerId);
+  if (!run) {
+    console.log(JSON.stringify({ claimed: false }));
+    return;
+  }
+
+  const progress = new SiteFinderProgressPublisher({
+    endpoint,
+    token,
+    runId: run.id,
+    initialSequence: 1,
+  });
+  try {
+    if (run.requestedSources.includes("apollo")) {
+      requireSecret(config.apolloApiKey, "APOLLO_API_KEY");
+    }
+    if (run.requestedSources.includes("companiesHouse")) {
+      requireSecret(
+        config.companiesHouseApiKey,
+        "COMPANIES_HOUSE_API_KEY",
+      );
+    }
+    const inputOutput = await resolvePrivateOutputDirectory({
+      privateDataDirectory: config.privateDataDirectory,
+      requestedDirectory: `queue-inputs/${run.id}`,
+    });
+    await assertOutputDirectoryIsEmpty(inputOutput);
+    await writePrivateJson(
+      inputOutput,
+      "companies.json",
+      run.companies.map((company) => ({
+        id: company.companyId,
+        name: company.companyName,
+        domain: company.domain,
+        websiteUrl: `https://${company.domain}`,
+        ...(company.apolloSearchDomain
+          ? { apolloSearchDomain: company.apolloSearchDomain }
+          : {}),
+        source: "file",
+      })),
+    );
+    await enrich(
+      queueArguments(
+        run,
+        privateOutputFile(inputOutput, "companies.json"),
+        inputs,
+      ),
+      {
+        runId: run.id,
+        companyIds: run.companies.map((company) => company.companyId),
+        progress,
+      },
+    );
+  } catch (error) {
+    await progress.fail(error);
+    throw error;
+  }
 }
 
 function printHelp(): void {
@@ -986,6 +1209,9 @@ async function main(): Promise<void> {
       break;
     case "enrich":
       await enrich(args);
+      break;
+    case "run-queue":
+      await runQueue();
       break;
     case "help":
     case "--help":

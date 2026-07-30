@@ -181,9 +181,15 @@ an explicitly configured local directory outside Git and iCloud.
 Official company websites remain the evidence source. When explicitly enabled,
 Apollo can add licensed business contact data for the confirmed company
 hostname. Licensed email results are labelled separately and remain in human
-review; they do not satisfy the stricter public-email approval gate. Companies
-House and procurement are represented as reviewed source choices for the queue
-but remain inactive until their worker adapters are implemented.
+review; they do not satisfy the stricter public-email approval gate. Reviewed
+Companies House and procurement choices use the worker's existing read-only
+adapters when configured.
+
+The local operator runs `npm run queue:run` from
+`services/research-worker`. It validates the approved cleanup ledger and both
+CRM snapshot manifests first, conditionally claims one oldest queued run, and
+publishes progress against that same run. It exits after one run rather than
+remaining as an unattended daemon.
 
 The production connection must preserve the same boundary:
 

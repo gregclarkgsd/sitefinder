@@ -75,8 +75,9 @@ flowchart LR
     queue. That separation remains intentional until the governed Attio
     writeback and bulk-audience design exists.
 12. SiteFinder queues reviewed company/source requests; only the approved local
-    worker consumes them. Companies House and procurement stay disabled at the
-    worker layer until dedicated adapters are implemented.
+    worker consumes them. The worker validates its private cleanup and CRM
+    snapshot prerequisites before claiming one run. Reviewed Companies House
+    and procurement choices map to the existing read-only adapters.
 
 ## Current handoff from the Attio cleanup task
 

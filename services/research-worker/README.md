@@ -283,6 +283,38 @@ This updates only the SiteFinder run viewer. It does not create or update
 Attio or Pipedrive records, and discovered candidates still require a person
 to approve or reject them.
 
+### Run one reviewed SiteFinder queue request
+
+Set `RESEARCH_AGENT_INGEST_URL`, `RESEARCH_AGENT_INGEST_TOKEN`, and
+`RESEARCH_QUEUE_INPUT_MANIFEST` in the local worker environment. The queue
+manifest itself must be private and may use relative paths beneath
+`RESEARCH_PRIVATE_DATA_DIRECTORY`:
+
+```json
+{
+  "schemaVersion": 1,
+  "cleanupDecisions": "cleanup/decisions.jsonl",
+  "cleanupManifest": "cleanup/approval-manifest.json",
+  "attioPeople": "snapshots/attio-post-cleanup/people.json",
+  "attioSnapshotManifest": "snapshots/attio-post-cleanup/completion-manifest.json",
+  "pipedrivePeople": "snapshots/pipedrive/people.json",
+  "pipedriveSnapshotManifest": "snapshots/pipedrive/completion-manifest.json"
+}
+```
+
+Then run:
+
+```bash
+npm run queue:run
+```
+
+The command fully verifies those cleanup and CRM inputs before asking
+SiteFinder for work. It atomically claims at most one oldest queued request,
+uses the company IDs and sources reviewed in SiteFinder, saves the private
+evidence pack under `queue-runs/<run-id>`, and exits. Apollo is contacted only
+when that reviewed request includes Apollo, so an empty queue and failed
+preflight consume no Apollo credits.
+
 Every retained discovery is compared by exact normalized business email with
 the two verified CRM snapshots. Results are one of: already in Attio,
 Pipedrive-only, missing from both, conflicting matches, or unverifiable.
