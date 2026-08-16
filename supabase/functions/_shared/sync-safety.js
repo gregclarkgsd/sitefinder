@@ -8,6 +8,14 @@ export function canonicalCcsSiteId(value) {
   return siteId;
 }
 
+export function staleCcsSyncCutoff(now = new Date(), leaseMinutes = 30) {
+  const nowTime = new Date(now).getTime();
+  if (!Number.isFinite(nowTime) || !Number.isFinite(leaseMinutes) || leaseMinutes <= 0) {
+    throw new TypeError('A valid time and positive sync lease are required');
+  }
+  return new Date(nowTime - leaseMinutes * 60_000).toISOString();
+}
+
 export function assertSafeCcsFeedSnapshot(markerFeed, targetProjectCount, activeProjectCount) {
   if (!Array.isArray(markerFeed)) {
     throw new Error('CCS marker feed did not return an array');

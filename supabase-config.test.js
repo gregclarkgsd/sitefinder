@@ -42,6 +42,7 @@ test('declares the gateway JWT boundary for every deployed Edge Function', () =>
     'gmail-mailboxes',
     'gmail-outreach-webhook',
     'process-outreach-followups',
+    'process-scheduled-initial-outreach',
   ]) {
     assert.equal(verifyJwtFor(functionName), false, functionName);
   }

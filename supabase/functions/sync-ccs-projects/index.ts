@@ -3,7 +3,12 @@ import { createClient } from 'npm:@supabase/supabase-js@2.110.7';
 import {
   assertSafeCcsFeedSnapshot,
   isExplicitlyEnabled,
+  staleCcsSyncCutoff,
 } from '../_shared/sync-safety.js';
+import {
+  hasCcsDetailChanged,
+  latestCcsChangedFields,
+} from '../_shared/ccs-change-fields.js';
 
 const MARKERS = 'https://ccsfilestore.blob.core.windows.net/constructionmap/live/json/sitemarkers.json';
 const DETAILS = 'https://portal.ccscheme.org.uk/api/searchwebapi/getsiteposterdetails';
@@ -72,13 +77,18 @@ async function concurrentMap<T, R>(items: T[], limit: number, worker: (item: T) 
 async function fetchExistingProjects(db: any) {
   const rows: any[] = [];
   const pageSize = 1000;
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await db
+  let lastProjectId: string | null = null;
+  for (;;) {
+    let query = db
       .from('ccs_projects')
-      .select('project_id,payload_hash,detail_hash,first_seen_at,discovered_after_baseline,last_changed_at,detail_last_checked_at,detail_data,is_active')
-      .range(from, from + pageSize - 1);
+      .select('project_id,payload_hash,detail_hash,first_seen_at,discovered_after_baseline,last_changed_at,last_changed_fields,detail_last_checked_at,detail_data,is_active,project_name,main_contractor,client,local_authority,latitude,longitude,address,site_manager_name,site_manager_job_title,site_manager_phone,marker_email,site_start_date,site_end_date,site_closed,summary,last_visit_date')
+      .order('project_id', { ascending: true })
+      .limit(pageSize);
+    if (lastProjectId) query = query.gt('project_id', lastProjectId);
+    const { data, error } = await query;
     if (error) throw error;
     rows.push(...(data || []));
+    lastProjectId = data?.at(-1)?.project_id || lastProjectId;
     if (!data || data.length < pageSize) return rows;
   }
 }
@@ -94,12 +104,35 @@ Deno.serve(async request => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     { auth: { persistSession: false } },
   );
+  const claimAttemptedAt = new Date().toISOString();
+  const { error: leaseCleanupError } = await db
+    .from('ccs_sync_runs')
+    .update({
+      status: 'failed',
+      completed_at: claimAttemptedAt,
+      error_message: 'CCS sync lease expired before completion',
+    })
+    .eq('status', 'running')
+    .lt('started_at', staleCcsSyncCutoff(new Date(claimAttemptedAt)));
+  if (leaseCleanupError) {
+    return Response.json({ error: leaseCleanupError.message }, { status: 500 });
+  }
   const { data: run, error: runError } = await db
     .from('ccs_sync_runs')
     .insert({ status: 'running' })
     .select('id')
     .single();
-  if (runError) return Response.json({ error: runError.message }, { status: 500 });
+  if (runError) {
+    const alreadyRunning = runError.code === '23505';
+    return Response.json(
+      {
+        error: alreadyRunning
+          ? 'A CCS sync is already running'
+          : runError.message,
+      },
+      { status: alreadyRunning ? 409 : 500 },
+    );
+  }
 
   try {
     const markerResponse = await fetch(MARKERS, { signal: AbortSignal.timeout(20_000) });
@@ -146,8 +179,13 @@ Deno.serve(async request => {
       const detailHash = detail ? await digest(detailFields(detail)) : before?.detail_hash || null;
       const isNew = !before;
       const markerChanged = Boolean(before && before.payload_hash !== payloadHash);
-      const detailChanged = Boolean(before?.detail_hash && detailHash && before.detail_hash !== detailHash);
-      const changed = markerChanged || detailChanged;
+      const detailChanged = hasCcsDetailChanged({
+        projectExists: Boolean(before),
+        previousHash: before?.detail_hash,
+        nextHash: detailHash,
+      });
+      const reactivated = Boolean(before && before.is_active === false);
+      const changed = markerChanged || detailChanged || reactivated;
       if (isNew && !baseline) newProjects++;
       if (changed) changedProjects++;
       if (!baseline && (isNew || changed)) projectsEligibleForAttio.push(projectId);
@@ -155,7 +193,7 @@ Deno.serve(async request => {
       const managerName = detail
         ? [detail.SiteManagerFirstName, detail.SiteManagerLastName].filter(Boolean).join(' ') || null
         : null;
-      rows.push({
+      const nextRow = {
         project_id: projectId,
         project_name: project.Name || projectId,
         main_contractor: detail?.MainContractor || project.MainContractor || null,
@@ -184,6 +222,26 @@ Deno.serve(async request => {
         detail_last_checked_at: detailError ? before?.detail_last_checked_at || null : observedAt,
         detail_error: detailError,
         detail_data: detail || before?.detail_data || null,
+      };
+      const changedFields = latestCcsChangedFields({
+        before: {
+          ...(before || {}),
+          performance_level: before?.detail_data?.PerformanceLevel,
+        },
+        after: {
+          ...nextRow,
+          performance_level: detail?.PerformanceLevel
+            ?? before?.detail_data?.PerformanceLevel,
+        },
+        isNew,
+        markerChanged,
+        detailChanged,
+        reactivated,
+        previous: before?.last_changed_fields || [],
+      });
+      rows.push({
+        ...nextRow,
+        last_changed_fields: changedFields,
       });
     }
 
@@ -197,12 +255,18 @@ Deno.serve(async request => {
     // Retire unseen rows only after every fresh row is durable. A failed batch
     // therefore leaves conservative false positives instead of deactivating
     // the live catalogue before replacement data is safely stored.
-    const { error: inactiveError } = await db
+    const { data: retiredProjects, error: inactiveError } = await db
       .from('ccs_projects')
-      .update({ is_active: false })
+      .update({
+        is_active: false,
+        last_changed_at: observedAt,
+        last_changed_fields: ['Removed from latest CCS feed'],
+      })
       .eq('is_active', true)
-      .lt('last_seen_at', observedAt);
+      .lt('last_seen_at', observedAt)
+      .select('project_id');
     if (inactiveError) throw inactiveError;
+    changedProjects += retiredProjects?.length || 0;
 
     const scheduleRows = rows.map(row => ({
       project_id: row.project_id,
