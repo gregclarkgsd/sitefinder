@@ -27,6 +27,9 @@ verify_jwt = false
 [functions.process-outreach-followups]
 verify_jwt = false
 
+[functions.process-scheduled-initial-outreach]
+verify_jwt = false
+
 # User-triggered functions keep the gateway JWT check and also validate the GSD
 # email domain inside the function.
 [functions.sync-approved-leads-to-attio]
