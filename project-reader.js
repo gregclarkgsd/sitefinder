@@ -24,10 +24,11 @@ export function createProjectReader({ authClient = null, fetchImpl = fetch, now 
         const response = await fetchImpl(MARKERS, { signal: AbortSignal.timeout(20_000) });
         if (!response.ok) throw new Error(`CCS marker feed returned ${response.status}`);
         const raw = await response.json();
+        if (!Array.isArray(raw)) throw new Error('CCS marker feed returned an invalid project list');
         markerCache = {
           at: now(),
           sourceLastModifiedAt: response.headers.get('last-modified') || null,
-          data: Array.isArray(raw) ? raw : [],
+          data: raw,
           lastAttemptAt: markerCache.lastAttemptAt,
           lastError: null,
         };
@@ -134,6 +135,9 @@ export function createProjectReader({ authClient = null, fetchImpl = fetch, now 
     const response = await fetchImpl(sourceUrl, { signal: AbortSignal.timeout(20_000) });
     if (!response.ok) throw new Error(`CCS detail feed returned ${response.status}`);
     const detail = await response.json();
+    if (!detail || typeof detail !== 'object' || Array.isArray(detail)) {
+      throw new Error('CCS detail feed returned an invalid project record');
+    }
     return { ...detail, SourceUrl: sourceUrl,
       retrievedAt: new Date(now()).toISOString(), sourcePublicationDate: null,
       sourceRecordDate: detail.Date || null,
@@ -144,7 +148,7 @@ export function createProjectReader({ authClient = null, fetchImpl = fetch, now 
     return {
       ok: Boolean(markerCache.data.length) || !markerCache.lastError,
       markerCacheStatus: markerCache.data.length
-        ? (markerAgeMs > CACHE_TTL_MS ? 'stale' : 'ready')
+        ? (markerAgeMs >= CACHE_TTL_MS ? 'stale' : 'ready')
         : (markerCache.lastError ? 'error' : 'warming'),
       markerCacheAt: markerCache.at || null,
       markerCacheProjects: markerCache.data.length,

@@ -55,3 +55,9 @@ test('concurrent reads coalesce a marker refresh', async () => {
   await Promise.all([reader.listProjects(), reader.listProjects()]);
   assert.equal(requests, 1);
 });
+test('malformed CCS payloads fail clearly rather than returning successful empty records', async () => {
+  const reader = createProjectReader({ fetchImpl: async () => Response.json(null) });
+  await assert.rejects(reader.listProjects(), /invalid project list/);
+  assert.equal(reader.health().ok, false);
+  await assert.rejects(reader.getProject('1'), /invalid project record/);
+});
