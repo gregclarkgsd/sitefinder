@@ -361,3 +361,54 @@ being silently reset. Scheduled watch and follow-up responses return
 `ok: false` with per-mailbox or per-lead results when work is partial; operators
 should investigate those non-success responses instead of assuming the batch
 completed.
+
+### MCP authentication, diagnostics and dates
+
+Hosted `/mcp` requests authenticate once, before any tool executes. The hosted
+MCP tools and browser API then use the same in-process project reader; the MCP
+server does not make an authenticated HTTP call back to its own API. Production
+access still requires a valid GSD Supabase session or the configured server-only
+MCP bearer credential. Static credentials do not grant signed-in research actions.
+The separate stdio process continues to call the authenticated HTTP API.
+
+OAuth clients should use the issuer advertised at
+`/.well-known/oauth-protected-resource/mcp`, request
+`openid email profile offline_access`, persist rotated refresh tokens, and refresh
+an expired access token through the issuer's token endpoint. Token refresh belongs
+to the connecting client; SiteFinder never receives or stores refresh tokens.
+After changing scopes, an existing connection may need to be re-authorised.
+Static-token clients instead send their existing server-only bearer credential;
+do not put this token in frontend settings. A 401 means refresh/reconnect or check
+that credential; a 503 authentication error means retry the identity service.
+
+`/health` and `sitefinder_status` report the application version, MCP server
+version, and commit (`RENDER_GIT_COMMIT` on Render, local Git HEAD otherwise).
+This distinguishes a deployed change from a local fix. A missing commit remains
+null rather than being guessed.
+
+Tool dates have separate meanings:
+
+- `retrieved_at`: when SiteFinder served/read this result.
+- `marker_retrieved_at`: when the cached CCS marker feed was fetched.
+- `last_successful_sync_at`: the latest completed database sync visible under
+  the caller's existing GSD row-level permissions. Static-token/local preview
+  reads report this as null with `sync_status: unavailable`; no service-role
+  credential is used to bypass those permissions.
+- `source_publication_date`: null unless the source explicitly provides a
+  publication date. Current CCS responses have no clearly labelled publication
+  field; their generic `Date` is retained as `source_record_date` on details.
+- `source_last_modified_at`: the source HTTP `Last-Modified` header, when present;
+  it is not treated as a publication or database sync date.
+- `start_date` / `completion_date`: published project programme dates;
+  `first_registered_at` is CCS's separate registration field.
+
+Search/status/list results expose `stale` when a failed or overdue marker refresh
+requires use of the previous feed. `updatedAt` remains on the browser API for
+compatibility and means marker retrieval, not source publication.
+
+The smoke tests select a project from the current feed rather than requiring a
+specific historic project to remain active. `npm test` also tests production
+credential rejection, GSD OAuth and static-token access, shared API/tool reads,
+origin restrictions, authentication outages, and automatic OAuth refresh/retry
+using a controlled identity-server fixture. Live smoke tests validate CCS data;
+they do not prove the installed plugin's private OAuth connection works.

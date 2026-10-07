@@ -1,3 +1,4 @@
+import { deploymentVersion } from '../deployment-version.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod/v4';
 
@@ -11,9 +12,19 @@ const textResult = data => ({
 const errorResult = error => ({
   content: [{
     type: 'text',
-    text: `SiteFinder request failed: ${error instanceof Error ? error.message : String(error)}`,
+    text: JSON.stringify({ error: error instanceof Error ? error.message : String(error), code: error.code || 'project_read_failed', status: error.status || null }),
   }],
   isError: true,
+});
+
+const dates = feed => ({
+  retrieved_at: feed.retrievedAt || null,
+  marker_retrieved_at: feed.markerRetrievedAt || feed.updatedAt || null,
+  last_successful_sync_at: feed.lastSuccessfulSyncAt || null,
+  sync_status: feed.syncStatus || 'unavailable',
+  source_publication_date: feed.sourcePublicationDate || null,
+  source_last_modified_at: feed.sourceLastModifiedAt || null,
+  stale: Boolean(feed.stale),
 });
 
 const clean = value => String(value || '').trim();
@@ -57,7 +68,8 @@ export function createSiteFinderClient(
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
-      throw new Error(`${pathname} returned HTTP ${response.status}`);
+      const message = response.status === 401 ? 'SiteFinder authentication failed. Refresh your OAuth access token or reconnect with a GSD account; static-token connections require the configured bearer credential.' : response.status === 403 ? 'SiteFinder access denied. Use an authorised GSD account.' : `SiteFinder source request failed (${pathname}, HTTP ${response.status}). Retry later.`;
+      throw Object.assign(new Error(message), { code: response.status === 401 ? 'authentication_required' : 'connection_failed', status: response.status });
     }
     return response.json();
   }
@@ -74,9 +86,9 @@ export function createSiteFinderMcpServer(options = {}) {
   const client = options.client || createSiteFinderClient(options.baseUrl);
   const server = new McpServer({
     name: 'gsd-sitefinder',
-    version: '1.0.0',
+    version: deploymentVersion.mcpVersion,
   }, {
-    instructions: 'Use these read-only tools to find and verify active CCS construction leads for GSD Decorating. Treat CCS contact data as business contact information and return the source URL when presenting a lead.',
+    instructions: 'Use these read-only tools to find and verify active CCS construction leads for GSD Decorating. Treat CCS contact data as business contact information and return the source URL when presenting a lead. Distinguish retrieved_at (this read), marker_retrieved_at (feed cache retrieval), last_successful_sync_at (successful database sync), source_publication_date (only when explicitly supplied by CCS), source_last_modified_at (HTTP metadata), and start_date/completion_date (project programme). Null dates are unknown; never substitute retrieval time for publication or sync time.',
   });
 
   server.registerTool('search_projects', {
@@ -125,7 +137,7 @@ export function createSiteFinderMcpServer(options = {}) {
       });
       return textResult({
         source: feed.source,
-        feed_updated_at: feed.updatedAt,
+        ...dates(feed),
         total_matches: matches.length,
         offset,
         returned: Math.min(limit, Math.max(0, matches.length - offset)),
@@ -168,6 +180,11 @@ export function createSiteFinderMcpServer(options = {}) {
         latitude: Number.isFinite(Number(detail.Latitude)) ? Number(detail.Latitude) : null,
         longitude: Number.isFinite(Number(detail.Longitude)) ? Number(detail.Longitude) : null,
         source_url: detail.SourceUrl,
+        retrieved_at: detail.retrievedAt || null,
+        source_publication_date: detail.sourcePublicationDate || null,
+        source_record_date: detail.sourceRecordDate || null,
+        first_registered_at: detail.DateFirstRegistered || null,
+        source_last_modified_at: detail.sourceLastModifiedAt || null,
         ccs_record: detail,
       });
     } catch (error) {
@@ -204,7 +221,7 @@ export function createSiteFinderMcpServer(options = {}) {
         .map(item => ({ ...item, locations: [...item.locations].sort() }))
         .sort((a, b) => b.active_projects - a.active_projects || a.contractor.localeCompare(b.contractor))
         .slice(0, limit);
-      return textResult({ returned: contractors.length, contractors });
+      return textResult({ ...dates(feed), returned: contractors.length, contractors });
     } catch (error) {
       return errorResult(error);
     }
@@ -236,7 +253,7 @@ export function createSiteFinderMcpServer(options = {}) {
         .map(([location, active_projects]) => ({ location, active_projects }))
         .sort((a, b) => b.active_projects - a.active_projects || a.location.localeCompare(b.location))
         .slice(0, limit);
-      return textResult({ returned: locations.length, locations });
+      return textResult({ ...dates(feed), returned: locations.length, locations });
     } catch (error) {
       return errorResult(error);
     }
@@ -244,7 +261,7 @@ export function createSiteFinderMcpServer(options = {}) {
 
   server.registerTool('sitefinder_status', {
     title: 'Check SiteFinder status',
-    description: 'Check whether SiteFinder is reachable and report the current active-project total and feed refresh time.',
+    description: 'Check whether SiteFinder is reachable and report the current active-project total and retrieval time, last successful database sync, source publication date if available, and deployed version. Retrieval times are not source publication or project programme dates.',
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -259,7 +276,8 @@ export function createSiteFinderMcpServer(options = {}) {
         ok: Boolean(health.ok),
         sitefinder_url: client.origin,
         active_projects: Number(feed.total || 0),
-        feed_updated_at: feed.updatedAt || null,
+        ...dates(feed),
+        deployment: health.deployment || null,
         marker_cache_at: health.markerCacheAt || null,
         source: feed.source,
       });
