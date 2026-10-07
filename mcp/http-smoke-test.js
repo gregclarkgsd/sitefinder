@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { checkProjectTools } from './smoke-checks.js';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -13,33 +14,7 @@ const client = new Client({ name: 'sitefinder-http-smoke-test', version: '1.0.0'
 
 try {
   await client.connect(transport);
-  const tools = await client.listTools();
-  const search = await client.callTool({
-    name: 'search_projects',
-    arguments: { query: '22 Hill Street', limit: 5 },
-  });
-  const data = JSON.parse(search.content[0].text);
-  const expectedTools = ['get_project', 'list_contractors', 'list_locations', 'search_projects', 'sitefinder_status'];
-  const actualTools = tools.tools.map(tool => tool.name).sort();
-
-  if (JSON.stringify(actualTools) !== JSON.stringify(expectedTools)) {
-    throw new Error(`Unexpected tools: ${actualTools.join(', ')}`);
-  }
-  const project = data.projects.find(item => item.site_id === '518253');
-  if (!project) {
-    throw new Error('HTTP MCP project search did not return CCS 518253');
-  }
-  if (project.main_contractor_id !== '500002' || !project.client_id) {
-    throw new Error('HTTP MCP project search did not return stable CCS join keys');
-  }
-
-  console.log(JSON.stringify({
-    ok: true,
-    transport: 'streamable-http',
-    endpoint: url,
-    tools: actualTools,
-    search_matches: data.total_matches,
-  }, null, 2));
+  console.log(JSON.stringify(await checkProjectTools(client), null, 2));
 } finally {
   await client.close();
 }
