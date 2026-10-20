@@ -3,6 +3,20 @@
 -- No network calls, campaign enrollment, credential storage or Gmail changes.
 begin;
 create schema if not exists private;
+alter table public.ccs_projects add column first_seen_sync_run_id bigint
+  references public.ccs_sync_runs(id);
+
+-- Preserve the original insertion run, including NULL for historical rows.
+create function private.preserve_ccs_insert_run()
+returns trigger language plpgsql set search_path = '' as $$
+begin
+  new.first_seen_sync_run_id := old.first_seen_sync_run_id;
+  return new;
+end;
+$$;
+create trigger preserve_ccs_insert_run before update on public.ccs_projects
+for each row execute function private.preserve_ccs_insert_run();
+revoke all on function private.preserve_ccs_insert_run() from public, anon, authenticated;
 
 create table private.lemlist_review_boundary (
   singleton boolean primary key default true check (singleton),
@@ -19,6 +33,7 @@ create table private.lemlist_insert_events (
   capture_id uuid not null,
   project_id text not null unique, -- Keep first insert even after deletion/reimport.
   captured_at timestamptz not null default clock_timestamp(),
+  sync_run_id bigint references public.ccs_sync_runs(id),
   project jsonb not null
 );
 
@@ -28,8 +43,8 @@ declare boundary private.lemlist_review_boundary;
 begin
   select * into boundary from private.lemlist_review_boundary where singleton;
   if found then
-    insert into private.lemlist_insert_events(capture_id, project_id, project)
-    values (boundary.capture_id, new.project_id, to_jsonb(new))
+    insert into private.lemlist_insert_events(capture_id, project_id, sync_run_id, project)
+    values (boundary.capture_id, new.project_id, new.first_seen_sync_run_id, to_jsonb(new))
     on conflict (project_id) do nothing;
   end if;
   return new;

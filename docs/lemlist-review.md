@@ -1,8 +1,11 @@
 # Lemlist review-only prototype
 
-This version produces a local review record and a proposed request. It never calls
-Lemlist, starts/reviews a campaign, writes to Supabase, or changes Gmail behavior.
-There is no API key setting, network client, automatic-send switch, or live adapter.
+The offline review path produces a local record and a proposed request. It never
+calls Lemlist, starts/reviews a campaign or writes to Supabase. The optional sync
+linkage and Gmail guard hooks described below are disabled by default and have not
+been deployed; existing Gmail behavior is unchanged with those flags unset.
+There is no API key setting, Lemlist network client or automatic-send switch.
+Read-only adapters accept injected source clients; no live clients are connected.
 `automaticSending: false` is enforced in the store. A review record is not an
 enrollment and must never be used as permission to send later without fresh checks.
 
@@ -23,7 +26,7 @@ from those fields to the lead's `projectName` has been established.
 
 ## Local use
 
-Run `node --test lemlist-review.test.js` (no dependencies required). Tests only use
+Run `node --test lemlist-review.test.js lemlist-adapters.test.js` (no dependencies required). Tests only use
 synthetic projects and reserved `example.invalid` addresses, never an external
 submission. The CLI takes an explicit local state file and JSON input:
 
@@ -60,17 +63,20 @@ tables and an AFTER INSERT trigger, then exposes a one-time initializer which
 locks the project table, saves the future boundary and snapshots excluded IDs in
 one transaction. It does not enroll anything. It preserves IDs across project
 deletion/reimport and does not capture UPDATE events. Do not deploy or execute this
-script as part of reviewing this branch. It still needs local PostgreSQL/Supabase
-execution tests before promotion to an approved migration.
+script against a live database as part of reviewing this branch. Focused SQL tests
+use an in-memory PostgreSQL engine with synthetic schema/data (see below); the full
+Supabase migration/RLS suite remains a separate prerequisite.
 
-The future export adapter must map its `id`, `capture_id`, `captured_at`, `project`
-to the module's `id`, `captureId`, `capturedAt`, `project`, adding literal INSERT and
-the verified evidence mode. It must prove which successfully completed CCS sync
-created the row. The current sync does not store that run ID on each project:
-**add and test durable insert-to-sync-run linkage before claiming automated
-eligibility**; do not infer completion from an unrelated successful later run.
-Partial/failed runs must remain held. Trigger rollback follows the source insert
-transaction, but the sync itself uses multiple batches and is not one transaction.
+`LEMLIST_INSERT_CAPTURE_ENABLED` is unset by default. Only an exact `true` adds the
+current run ID to sync upserts. The proposed SQL preserves the original ID on all
+updates, including NULL for historical records, and captures that ID on insertion.
+`buildDatabaseReview` checks that the event, current project and original snapshot
+all point to the same completed sync, with valid start/insert/completion times.
+Missing/running/failed/unrelated runs hold. Do not enable this flag before the
+separately approved SQL is installed. No flags are enabled by this branch.
+
+The trigger rolls back with the source insert, but sync batches are separate
+transactions. The completion check is therefore necessary even with capture.
 
 ## Required review evidence
 
@@ -98,23 +104,88 @@ does not create another candidate. Holds can be reevaluated with fresh evidence
 for the same immutable insert event. Duplicate companies/contacts require human
 consolidation into one conversation; this prototype intentionally has no override.
 
+## Read adapters and provider guard
+
+`lemlist-adapters.js` provides a read-only Supabase port with ordered pagination
+and an injected provider pagination contract. `buildDatabaseReview` combines the
+captured event, boundary/exclusions, original sync, current project, tracking,
+outreach leads/history/suppressions and provider reservations with complete
+Lemlist/Woodpecker/Attio snapshots and a fresh owner-approved contact review.
+Provider snapshots must normalize each record into `email`, canonical `companyKey`,
+optional `projectId`/`ownerEmail`, and explicit `active`, `contacted`, `suppressed`,
+`bounced`, `replied` booleans. Missing flags, missing sources, stale checks, invalid
+pagination or read errors hold. An unused provider still needs an explicitly
+verified empty snapshot, not a silent fallback. No real provider API or campaign
+is read during tests. Provider-specific GET transports and private-schema read
+access must be reviewed/configured separately; no permissions are changed here.
+The `database` label describes the adapter contract, not proof that tests used a
+live database. All committed fixtures are mocked.
+
+`docs/outreach-provider-guard.sql` is also outside automatic migrations. It defines
+fresh identity-bound checks and permanent unique project/email/company claims.
+Gmail's initial and follow-up paths call its RPC only when the unconfigured
+`OUTREACH_PROVIDER_GUARD_ENABLED` equals `true`; otherwise behavior is unchanged.
+When enabled, missing schema/checks, owner/sender conflicts, suppressions, replies,
+stale history or another provider's reservation block Gmail before token retrieval
+and before its existing per-message claim. Existing Gmail message claims continue
+to prevent concurrent sends for the same lead. Matching provider reservations can
+be reused for follow-ups but identities/providers cannot silently switch. Failed
+or uncertain sends retain reservations. There is no automatic release operation.
+
+The RPC is restricted to service-role execution in the proposed SQL. A future
+authorized orchestrator must write identity-bound checks from complete source
+reads; this version only reads evidence, previews requests and tests claims locally.
+It cannot write checks or enroll Lemlist leads. Enabling a guard is a deployment
+decision, not a way to enable Lemlist sending. Import existing cross-provider
+history and resolve company aliases before any activation. The local file queue
+is a review artifact; the SQL uniqueness constraints are the multi-worker boundary.
+
+`npm test` runs all Node tests plus these focused SQL checks using pinned PGlite
+0.5.10. Run the focused SQL test alone with:
+
+```
+node scripts/test-lemlist-sql.mjs
+```
+
+This creates an in-memory PostgreSQL database only and executes both proposed SQL
+scripts against synthetic tables. It checks capture, rollback, immutable run
+linkage, reimports, initialization, provider conflict, suppression, freshness,
+unique contact/company constraints and execution grants. It does not substitute
+for full production-shaped Supabase/RLS or multi-connection race tests.
+
+Example mocked preview (never submitted):
+
+```json
+{"status":"review_only","submitted":false,"body":{"email":"test@example.invalid","projectName":"Mock school","sitefinderProjectId":"site-new"}}
+```
+
 ## Before any separately authorized live test
+
+Validation on Northy (2026-10-20): 148 Node tests and 21 focused in-memory
+PostgreSQL checks passed; Vite production build passed. A fresh locked offline
+install also succeeded. The dependency audit reports the same 12 advisories on
+the reviewed base and this branch (3 critical, 5 high, 4 moderate), with no newly
+affected packages. Existing dependency remediation remains separate work. Docker
+and Deno are unavailable locally, so full Supabase migration/RLS and Deno suite
+results must be checked in CI. The focused tests do not prove multi-connection
+race handling or production deployment parity. Daniel's campaign link, actual
+variable readback and paused/manual campaign settings remain unverified.
 
 1. Verify this branch and database script locally; confirm deployed schema/version.
 2. Agree the future cutoff, dedicated paused campaign, Sam/Greg ownership rules,
    canonical company matching and approved copy requesting decorating tenders.
-3. Approve and implement the capture/export adapter and durable sync-run linkage.
-   Prove complete snapshot pagination, initialization races, rollback and reimports.
-4. Replace operator attestations with authenticated, fail-closed reads and audit
-   references for each evidence source. Keep secrets server-side via an approved
-   connection; do not paste keys into files or chat.
-5. Add an explicit provider selection and atomic cross-provider claim respected
-   by both Gmail and Lemlist before any external submission. This branch has no
-   production mutual-exclusion guard because it cannot submit. Do not simply wire
-   its output into the existing Gmail "Approve and send" handler.
-6. Use a database-backed unique enrollment ledger for multiple workers, retain
-   rejected/excluded IDs, and add reconciliation for unknown API outcomes. Never
-   blindly retry a timed-out enrollment. Import existing cross-provider history.
+3. Validate both proposed SQL scripts on the complete local Supabase schema and
+   test initialization/concurrent-claim races with multiple connections. Review
+   consistent snapshot/export behavior under concurrent deletes and updates.
+4. Connect the read-only ports to authenticated, complete source reads and audit
+   references. Keep secrets server-side via an approved connection; do not paste
+   keys into files or chat. Configure canonical company identity and owner review.
+5. Separately approve SQL deployment and flag activation; populate fresh checks
+   only from verified reads. Every future Lemlist writer must use the same claim
+   RPC before submission and must retain reservations on unknown API outcomes.
+   Do not wire previews into the Gmail "Approve and send" handler.
+6. Implement an explicitly authorized Lemlist enrollment worker, including unknown
+   outcome reconciliation/readback. No such worker is present or enabled here.
 7. Implement authenticated, idempotent reply/bounce/unsubscribe event handling and
    shared suppression updates; recheck immediately before enrollment/send.
 8. With separate permission, use only an owned test address in a paused campaign
