@@ -206,12 +206,51 @@ head checks are shown on the draft PR.
    only from verified reads. Every future Lemlist writer must use the same claim
    RPC before submission and must retain reservations on unknown API outcomes.
    Do not wire previews into the Gmail "Approve and send" handler.
-6. Implement an explicitly authorized Lemlist enrollment worker, including unknown
-   outcome reconciliation/readback. No such worker is present or enabled here.
-7. Implement authenticated, idempotent reply/bounce/unsubscribe event handling and
-   shared suppression updates; recheck immediately before enrollment/send.
+6. Review the disabled synthetic worker below and implement separately authorized
+   production transport and transaction adapters, including provider readback.
+7. Connect a verified provider authenticator and durable event delivery to the
+   local reply/bounce/unsubscribe handler; recheck before enrollment/send.
 8. With separate permission, use only an owned test address in a paused campaign
    with automatic launch disabled. Read back `projectName`, preview rendered copy,
    and test duplicate rejection. Do not call campaign launch/review endpoints.
 
-No production or live Lemlist verification is claimed by these tests.
+## Disabled worker implementation
+
+`lemlist-worker.js` now implements enrollment orchestration through injected ports,
+durable SQL attempts, readback reconciliation and authenticated normalized event
+handling. It is disabled by default and only accepts explicit `synthetic` execution
+with mock evidence. There is no live transport, scheduler, HTTP endpoint, credential
+configuration or production verifier. The verifier must authenticate raw bytes
+before returning normalized reply/bounce/unsubscribe events; a JSON boolean alone
+is not authentication. Tests inject their verifier deliberately.
+
+The transaction port must implement `transaction(callback)` with one dedicated
+connection, rollback on exceptions and parameterized `query` results. Tests use
+PGlite. An approved production adapter is not connected. The unapplied
+`docs/lemlist-worker.sql` follows the two other design scripts and stores attempts
+and event IDs privately. Existing provider claims arbitrate project, email and
+company reservations. The worker commits an `uncertain` attempt before transport:
+crashes, timeouts and missing/mismatched/ambiguous readbacks never permit automatic
+resubmission. A later exact readback may confirm it. Review payload changes hold.
+
+Normalized events are identity-bound to an existing attempt and deduplicated by
+provider event ID and content hash. Replies stop follow-ups; bounces and opt-outs
+also add durable shared suppressions. Events cannot release reservations or undo
+a hold. Unknown campaign/recipient events fail for manual reconciliation. A future
+ingress needs durable retry/quarantine delivery and real provider authentication.
+Final local checks cannot make a database transaction atomic with an external API;
+provider-side paused enrollment and suppression enforcement must be verified before
+any live implementation. There are no campaign launch/review calls.
+
+`scripts/test-lemlist-full-schema.mjs` runs only against the fixed local Docker
+container `supabase_db_sitefinder`, after all existing migrations. CI executes it
+after the existing security tests. It applies design SQL only to that disposable
+database and checks original capture linkage, historical exclusions, concurrent
+same-lead claims, competing company claims, contact uniqueness and suppression.
+It accepts no remote URL. Docker is unavailable on Northy; actual execution must
+be confirmed from the new CI run, not inferred from the test file.
+
+The worker interface and local event handling replace the earlier missing-worker
+prerequisite, but authenticated transports, operational delivery, campaign readback
+and all activation approvals remain outstanding. No production or live Lemlist
+verification is claimed by these tests.
