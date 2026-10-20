@@ -1,0 +1,19 @@
+{
+  "campaignId": "cam_mock_review_only",
+  "teamId": "tea_mock_review_only",
+  "campaignUrl": "https://example.invalid/campaigns/cam_mock_review_only",
+  "senderEmail": "sender@example.invalid",
+  "mode": "review_only",
+  "automaticSending": false,
+  "liveVerified": false,
+  "exampleOnly": true,
+  "expectedCampaignStatus": "Draft",
+  "expectedLaunchMode": "manual",
+  "expectedVariables": ["firstName", "projectName"],
+  "goLiveAt": null,
+  "captureId": null,
+  "snapshotComplete": false,
+  "captureInstalled": false,
+  "excludedProjectIds": [],
+  "evidenceMode": "mock"
+}

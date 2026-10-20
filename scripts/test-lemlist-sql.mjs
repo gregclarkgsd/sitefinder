@@ -40,15 +40,18 @@ try {
   check(await value("select sync_run_id::int as value from private.lemlist_insert_events where project_id='new'"), 2);
   await db.exec(`
     insert into public.outreach_leads(id,project_id,recipient_email,attio_company_record_id,status,sender_email)
-    values('00000000-0000-4000-8000-000000000001','p1','test@example.invalid','company','approved','owner@example.invalid');
+    values('00000000-0000-4000-8000-000000000001','p1','test@example.invalid','company','approved','sender@example.invalid');
     insert into public.lead_tracking values('p1','owner@example.invalid','new');
   `);
   const claim = provider => db.query("select public.claim_outreach_provider('00000000-0000-4000-8000-000000000001',$1) as value", [provider]);
   await assert.rejects(claim('gmail'), /fresh cross-provider/); checks++;
   await db.exec(`insert into private.outreach_provider_checks values
-    ('00000000-0000-4000-8000-000000000001','test@example.invalid','attio:company','owner@example.invalid','gmail',now(),true,true,true,true)`);
+    ('00000000-0000-4000-8000-000000000001','test@example.invalid','attio:company','owner@example.invalid','sender@example.invalid','gmail',now(),true,true,true,true)`);
   check((await claim('gmail')).rows[0].value, { allowed: true, reused: false });
   check((await claim('gmail')).rows[0].value, { allowed: true, reused: true });
+  await db.exec("update public.outreach_leads set sender_email='different@example.invalid'");
+  await assert.rejects(claim('gmail'), /Ownership/); checks++;
+  await db.exec("update public.outreach_leads set sender_email='sender@example.invalid'");
   await assert.rejects(db.exec('delete from private.outreach_provider_claims'), /cannot be erased/); checks++;
   await db.exec("update private.outreach_provider_checks set provider='lemlist'; update public.outreach_leads set status='queued'");
   await assert.rejects(claim('lemlist'), /reservation conflict/); checks++;

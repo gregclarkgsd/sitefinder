@@ -47,6 +47,22 @@ test('mocked read adapters flow through durable review and replay without extern
   assert.equal(JSON.parse(readFileSync(path)).candidates.length, 1);
 });
 
+test('fictitious campaign template remains inert; mock review maps its ID and variables without submission', async t => {
+  const target = JSON.parse(readFileSync(new URL('./docs/lemlist-target.example.json', import.meta.url)));
+  const directory = mkdtempSync(join(tmpdir(), 'lemlist-target-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'state.json');
+  assert.throws(() => initializeReview(path, target), /go-live boundary/);
+  const f = fixture(); f.rows.boundary.campaign_id = target.campaignId;
+  const r = await buildDatabaseReview(f.options);
+  initializeReview(path, { ...r.boundary, snapshotComplete: true, captureInstalled: true }, '2030-01-01T00:00:00Z');
+  const output = reviewInsert(path, r.event, r.evidence, now);
+  assert.equal(output.submitted, false);
+  assert.match(output.candidate.requestPreview.path, /\/cam_mock_review_only\/leads\//);
+  assert.equal(output.candidate.requestPreview.body.firstName, 'Mock');
+  assert.equal(output.candidate.requestPreview.body.projectName, 'Mock school');
+});
+
 for (const [name, change] of [
   ['running sync', f => { f.rows.runs.status = 'running'; }],
   ['failed sync', f => { f.rows.runs.status = 'failed'; }],

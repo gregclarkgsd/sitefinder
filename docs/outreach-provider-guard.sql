@@ -15,6 +15,7 @@ create table private.outreach_provider_checks (
   recipient_email text not null,
   company_key text not null,
   owner_email text not null,
+  sender_email text not null,
   provider text not null check (provider in ('gmail','lemlist')),
   checked_at timestamptz not null,
   all_sources_complete boolean not null default false,
@@ -61,7 +62,7 @@ begin
   end if;
   if not exists (select 1 from public.lead_tracking t where t.project_id = lead.project_id
        and lower(trim(t.assigned_email)) = checks.owner_email and t.stage in ('new','contacted'))
-     or (requested_provider = 'gmail' and lower(trim(lead.sender_email)) is distinct from checks.owner_email)
+     or (requested_provider = 'gmail' and lower(trim(lead.sender_email)) is distinct from checks.sender_email)
      or exists (select 1 from public.outreach_suppressions where email = recipient)
      or lead.status in ('suppressed','bounced','replied','skipped','reconciliation_required')
      or lead.last_reply_at is not null or lead.last_bounce_at is not null or lead.last_unsubscribe_at is not null then

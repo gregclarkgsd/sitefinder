@@ -26,6 +26,16 @@ from those fields to the lead's `projectName` has been established.
 
 ## Local use
 
+The actual target was supplied privately and is retained only in the ignored
+local `.lemlist-review/target.private.json`. It was not read or changed remotely.
+`docs/lemlist-target.example.json` uses a fictitious campaign, team and sender;
+it is not an export of account settings. It intentionally has no go-live date or
+capture ID and fails initialization until the independent boundary/snapshot
+prerequisites are satisfied. It cannot enable sending. Blank variable previews
+with no selected lead do not verify or disprove mapping: test `{{firstName}}` and
+`{{projectName}}` against an approved fixture before any separately authorized
+live enrollment. Actual sender, signature and manual/draft settings need review.
+
 Run `node --test lemlist-review.test.js lemlist-adapters.test.js` (no dependencies required). Tests only use
 synthetic projects and reserved `example.invalid` addresses, never an external
 submission. The CLI takes an explicit local state file and JSON input:
@@ -161,15 +171,27 @@ Example mocked preview (never submitted):
 
 ## Before any separately authorized live test
 
-Validation on Northy (2026-10-20): 148 Node tests and 21 focused in-memory
+The accountable owner and sending mailbox are separate fields: Sam/Greg ownership
+must not be replaced with `sender@example.invalid`. The proposed guard binds fresh
+checks to both `owner_email` and `sender_email`, permitting a reviewed shared
+mailbox while rejecting a mailbox changed after review.
+
+Validation on Northy (2026-10-20): 149 Node tests and 22 focused in-memory
 PostgreSQL checks passed; Vite production build passed. A fresh locked offline
 install also succeeded. The dependency audit reports the same 12 advisories on
 the reviewed base and this branch (3 critical, 5 high, 4 moderate), with no newly
 affected packages. Existing dependency remediation remains separate work. Docker
 and Deno are unavailable locally, so full Supabase migration/RLS and Deno suite
 results must be checked in CI. The focused tests do not prove multi-connection
-race handling or production deployment parity. Daniel's campaign link, actual
-variable readback and paused/manual campaign settings remain unverified.
+race handling or production deployment parity. Daniel's campaign link is now
+recorded; actual variable readback, sender ownership, signature and draft/manual
+campaign settings remain unverified.
+
+CI run 39506400288 at commit 9750aff709476db62c25341f6ed3758f8771238b passed
+the complete existing Supabase migration/RLS job, Deno tests, Node tests/build
+and research-worker tests/build. Both dependency-audit steps failed. That run
+preceded the final fictitious target/shared-sender fixture update; subsequent
+head checks are shown on the draft PR.
 
 1. Verify this branch and database script locally; confirm deployed schema/version.
 2. Agree the future cutoff, dedicated paused campaign, Sam/Greg ownership rules,
