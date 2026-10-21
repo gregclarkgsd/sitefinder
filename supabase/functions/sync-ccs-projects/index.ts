@@ -1,5 +1,6 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'npm:@supabase/supabase-js@2.110.7';
+import { insertSyncLink } from '../_shared/lemlist-linkage.js';
 import {
   assertSafeCcsFeedSnapshot,
   isExplicitlyEnabled,
@@ -156,6 +157,7 @@ Deno.serve(async request => {
         ? [detail.SiteManagerFirstName, detail.SiteManagerLastName].filter(Boolean).join(' ') || null
         : null;
       rows.push({
+        ...insertSyncLink(isExplicitlyEnabled(Deno.env.get('LEMLIST_INSERT_CAPTURE_ENABLED')), run.id),
         project_id: projectId,
         project_name: project.Name || projectId,
         main_contractor: detail?.MainContractor || project.MainContractor || null,

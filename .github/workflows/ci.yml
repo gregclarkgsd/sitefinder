@@ -91,6 +91,9 @@ jobs:
       - name: Run database security and integrity tests
         run: npx --no-install supabase test db --local supabase/tests/database
 
+      - name: Test unapplied Lemlist designs on disposable full schema
+        run: node scripts/test-lemlist-full-schema.mjs
+
   research-worker-checks:
     name: Research worker checks
     runs-on: ubuntu-latest

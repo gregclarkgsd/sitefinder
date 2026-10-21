@@ -1,0 +1,37 @@
+{
+  "artifactType": "planning-only-not-runtime-config",
+  "testedCommit": "73d79d597d36c46651dc52955ab7d5206b8f259f",
+  "target": "resolve-from-approved-private-configuration",
+  "runtime": null,
+  "goLiveAt": null,
+  "ownerRouting": null,
+  "ownedTestRecipient": null,
+  "sources": {
+    "sitefinder": "unverified",
+    "attio": "unverified",
+    "lemlist": "unverified",
+    "woodpecker": "verify-use-or-explicit-empty-coverage"
+  },
+  "reportedCampaignPreparation": {
+    "emailVariantsApproved": true,
+    "signatureCompleted": true,
+    "openTracking": false,
+    "clickTracking": false,
+    "replyTracking": true,
+    "liveReadbackVerified": false
+  },
+  "permissions": {
+    "configureCredentials": false,
+    "readLiveSources": false,
+    "merge": false,
+    "deploy": false,
+    "applySql": false,
+    "initializeCapture": false,
+    "importContacts": false,
+    "enrollOwnedTest": false,
+    "enrollRealContacts": false,
+    "send": false
+  },
+  "requiresManualReview": true,
+  "automaticSending": false
+}

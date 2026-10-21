@@ -1,5 +1,6 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'npm:@supabase/supabase-js@2.110.7';
+import { guardGmailProvider } from '../_shared/lemlist-linkage.js';
 import {
   buildSendClaimRelease,
   buildSendReconciliationState,
@@ -380,6 +381,7 @@ Deno.serve(async req => {
 
   let accessToken;
   try {
+    await guardGmailProvider(db, lead.id, Deno.env.get('OUTREACH_PROVIDER_GUARD_ENABLED') === 'true');
     accessToken = await gmailAccessToken(mailbox);
   } catch (error) {
     return json({
