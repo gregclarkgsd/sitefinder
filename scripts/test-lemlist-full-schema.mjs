@@ -3,6 +3,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
+import { testStopConcurrency } from './test-lemlist-stop-concurrency.mjs';
 const args=['exec','-i','supabase_db_sitefinder','psql','-X','-U','postgres','-d','postgres','-v','ON_ERROR_STOP=1','-At'];
 function sql(source) {
   const result=spawnSync('docker',args,{input:source,encoding:'utf8'});
@@ -66,3 +67,4 @@ sql(`begin;
 commit;`);
 const blocked=await concurrent(claim);assert.notEqual(blocked.code,0);assert.match(blocked.output,/suppression/);
 console.log('Complete migrated Supabase schema: design SQL, capture, immutable linkage, concurrent claims, unique identities and suppression passed.');
+await testStopConcurrency();
