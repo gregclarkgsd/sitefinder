@@ -90,8 +90,8 @@ export function createLemlistWorker({ enabled = false, mode, db, provider, verif
   }
   async function handleEvent(raw, headers) {
     gate();
-    // Verifier must authenticate raw bytes before parsing and normalize only
-    // supported provider events. No production verifier is supplied here.
+    // Verifier authenticates the documented body secret before accepting the
+    // parsed event. Only injected synthetic verification is connected here.
     const event = await verifyEvent(raw, headers);
     const now = Date.parse(clock());
     requireValue(event?.authenticated === true && typeof event.id === 'string' && event.id.length > 0
@@ -99,7 +99,7 @@ export function createLemlistWorker({ enabled = false, mode, db, provider, verif
       && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(event.email)
       && event.email === normalize(event.email)
       && Number.isFinite(Date.parse(event.occurredAt)) && Date.parse(event.occurredAt) <= now, 'Unverified or invalid event');
-    const hash = digest([event.id,event.campaignId,event.email,event.kind,event.occurredAt]);
+    const hash = digest([event.id,event.campaignId,event.email,event.kind,event.occurredAt,event.providerLeadId ?? null]);
     return transaction(async tx => {
       // Serialize event replay, including deliveries racing across worker instances.
       await tx.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`lemlist-event:${event.id}`]);
@@ -108,7 +108,8 @@ export function createLemlistWorker({ enabled = false, mode, db, provider, verif
       const rows = (await tx.query('select * from private.lemlist_attempts where campaign_id=$1 and recipient_email=$2', [event.campaignId,event.email])).rows;
       requireValue(rows.length === 1, 'Unknown or ambiguous event identity; manual reconciliation required');
       await tx.query('select id from public.outreach_leads where lower(trim(recipient_email))=$1 order by id for update', [event.email]);
-      await attempt(tx, rows[0].lead_id);
+      const current=await attempt(tx, rows[0].lead_id);
+      requireValue(!event.providerLeadId || !current.provider_id || event.providerLeadId===current.provider_id, 'Provider lead identity mismatch');
       await tx.query('insert into private.lemlist_events(event_id,event_hash,campaign_id,recipient_email,kind,occurred_at) values($1,$2,$3,$4,$5,$6)',
         [event.id,hash,event.campaignId,event.email,event.kind,event.occurredAt]);
       await tx.query("update private.lemlist_attempts set state='held' where lead_id=$1", [rows[0].lead_id]);
@@ -120,6 +121,9 @@ export function createLemlistWorker({ enabled = false, mode, db, provider, verif
         ${column}=greatest(${column},$2::timestamptz),status=case when status='suppressed' then status else $3 end
         where lower(trim(recipient_email))=$1`, [event.email,event.occurredAt,status]);
       if (event.kind !== 'reply') await tx.query("insert into public.outreach_suppressions(email,reason,source) values($1,$2,'lemlist') on conflict(email) do nothing", [event.email,event.kind]);
+      await tx.query(`insert into private.lemlist_stop_outbox(event_id,lead_id,campaign_id,recipient_email,provider_lead_id)
+        values($1,$2,$3,$4,$5) on conflict(event_id) do nothing`,
+        [event.id,rows[0].lead_id,event.campaignId,event.email,event.providerLeadId ?? current.provider_id]);
       return { duplicate: false, state: 'held' };
     });
   }

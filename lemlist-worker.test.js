@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { createLemlistWorker } from './lemlist-worker.js';
+import {createWebhookVerifier,createEventInbox,createStopQueue} from './lemlist-delivery.js';
 
 const leadId='00000000-0000-4000-8000-000000000001';
 const now='2030-01-03T00:00:00Z';
@@ -23,6 +24,8 @@ async function fixture(t) {
     create table public.lead_tracking(project_id text primary key,assigned_email text,stage text);
     create table public.outreach_suppressions(email text primary key,reason text,source text);`);
   for (const file of ['outreach-provider-guard.sql','lemlist-worker.sql']) await db.exec(await readFile(new URL(`./docs/${file}`,import.meta.url),'utf8'));
+  await db.exec('create table private.lemlist_insert_events(id uuid primary key)');
+  await db.exec(await readFile(new URL('./docs/lemlist-delivery.sql',import.meta.url),'utf8'));
   await db.exec(`insert into public.outreach_leads(id,project_id,recipient_email,attio_company_record_id,status,sender_email)
       values('${leadId}','p1','test@example.invalid','company','queued','sender@example.invalid');
     insert into public.lead_tracking values('p1','owner@example.invalid','new');
@@ -74,6 +77,7 @@ for(const kind of ['reply','bounce','unsubscribe']) test(`${kind} atomically sto
   const f=await fixture(t); await f.worker.enroll(input());
   await Promise.all([f.worker.handleEvent(f.event(kind)),f.worker.handleEvent(f.event(kind))]);
   assert.equal((await f.db.query('select * from private.lemlist_events')).rows.length,1);
+  assert.equal((await f.db.query('select * from private.lemlist_stop_outbox')).rows.length,1);
   const lead=(await f.db.query('select * from public.outreach_leads')).rows[0];
   assert.equal(lead.follow_up_enabled,false);assert.equal(lead.next_follow_up_at,null);
   assert.equal((await f.db.query('select * from public.outreach_suppressions')).rows.length,kind==='reply'?0:1);
@@ -110,5 +114,22 @@ test('event transaction rolls back all changes if shared suppression cannot be s
   await assert.rejects(f.worker.handleEvent(f.event()),/simulate_failure/);
   assert.equal((await f.db.query('select * from private.lemlist_events')).rows.length,0);
   assert.equal((await f.db.query('select state from private.lemlist_attempts')).rows[0].state,'confirmed');
+  assert.equal((await f.db.query('select * from private.lemlist_stop_outbox')).rows.length,0);
   assert.equal((await f.db.query('select follow_up_enabled from public.outreach_leads')).rows[0].follow_up_enabled,true);
+});
+test('verified synthetic webhook flows through durable inbox, local hold and confirmed stop',async t=>{
+  const f=await fixture(t);await f.worker.enroll(input());
+  const dummy='synthetic-integration-fixture-secret';
+  const verify=createWebhookVerifier({enabled:true,mode:'synthetic',secret:dummy,teamId:'mock-team',campaignId:'mock-campaign',clock:()=>now});
+  const inbox=createEventInbox({enabled:true,mode:'synthetic',db:f.db,verify});
+  await inbox.receive(JSON.stringify({_id:'act-integration',type:'emailsUnsubscribed',teamId:'mock-team',campaignId:'mock-campaign',leadId:'mock-lead',leadEmail:'test@example.invalid',createdAt:'2030-01-02T23:00:00Z',secret:dummy}));
+  // Only the trusted inbox consumer passes stored verified events to this worker.
+  const consumer=createLemlistWorker({...f.options,verifyEvent:async event=>event});
+  assert.equal((await inbox.processNext(event=>consumer.handleEvent(event))).state,'processed');
+  assert.equal((await f.db.query('select state from private.lemlist_attempts')).rows[0].state,'held');
+  assert.equal((await f.db.query('select count(*)::int as n from public.outreach_suppressions')).rows[0].n,1);
+  const queue=createStopQueue({enabled:true,mode:'synthetic',db:f.db,clock:()=>now,provider:{pause:async r=>({confirmed:true,leadId:r.leadId,campaignId:r.campaignId})}});
+  assert.equal((await queue.runOne()).state,'confirmed');
+  const persisted=JSON.stringify((await f.db.query('select * from private.lemlist_event_inbox')).rows);
+  assert.ok(!persisted.includes(dummy));
 });

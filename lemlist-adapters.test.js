@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { guardGmailProvider, insertSyncLink } from './supabase/functions/_shared/lemlist-linkage.js';
+import {createSourceInventoryReader} from './lemlist-offline-ports.js';
 
 const now = '2030-02-02T00:05:00Z';
 function fixture() {
@@ -32,6 +33,15 @@ test('completed originating sync produces a review-only projectName preview from
   assert.equal(evaluated.eligible, true);
   assert.equal(evaluated.payload.projectName, 'Mock school');
   assert.equal(result.event.evidenceMode, 'database'); // mock port, not live verification
+});
+test('verified Woodpecker non-use supplies explicit coverage without requesting an integration',async()=>{
+  const f=fixture();delete f.sources.woodpecker;const reads=[];
+  const inventory=Object.fromEntries(['lemlist','attio','woodpecker'].map(provider=>[provider,{status:provider==='woodpecker'?'not_used':'in_use',checkedAt:now,verifiedBy:'owner',reference:'mock-inventory'}]));
+  f.options.providerSnapshot=createSourceInventoryReader({inventory,readSnapshot:async provider=>{reads.push(provider);return f.sources[provider];}});
+  const r=await buildDatabaseReview(f.options);
+  assert.equal(evaluateCandidate(r.boundary,r.event,r.evidence,now).eligible,true);
+  assert.deepEqual(reads.sort(),['attio','lemlist']);
+  inventory.woodpecker.status='unknown';await assert.rejects(buildDatabaseReview(f.options),/unconfirmed/);
 });
 
 test('mocked read adapters flow through durable review and replay without external submission', async t => {

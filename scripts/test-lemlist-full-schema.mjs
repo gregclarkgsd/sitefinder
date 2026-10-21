@@ -20,7 +20,7 @@ function concurrent(source) {
 }
 // Check the exact local stack exists before any writes; no remote fallback.
 sql('select version();');
-for(const file of ['lemlist-insert-capture.sql','outreach-provider-guard.sql','lemlist-worker.sql'])
+for(const file of ['lemlist-insert-capture.sql','outreach-provider-guard.sql','lemlist-worker.sql','lemlist-delivery.sql'])
   sql(readFileSync(new URL(`../docs/${file}`,import.meta.url),'utf8'));
 sql(`
   insert into public.ccs_projects(project_id,project_name,payload_hash,discovered_after_baseline)
