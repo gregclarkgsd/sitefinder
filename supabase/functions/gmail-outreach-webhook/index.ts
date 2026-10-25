@@ -7,6 +7,7 @@ import {
   mergeHistoryMessageIds,
   nextHistoryPageToken,
 } from '../_shared/gmail-reliability.js';
+import { classifyProjectReply } from '../_shared/reply-outcome.js';
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -89,6 +90,180 @@ function databaseError(context: string, error: any) {
   return new Error(`${context}: ${String(error?.message || error || 'database operation failed')}`);
 }
 
+const ATTIO_API = 'https://api.attio.com/v2';
+const DEFAULT_DEAL_OWNER_ID = '80466c1e-bbae-4c69-a03b-560fc1680d92';
+
+async function attioRequest(path: string, init: { method?: string; body?: unknown } = {}) {
+  const token = Deno.env.get('ATTIO_ACCESS_TOKEN');
+  if (!token) throw new Error('Attio deal creation is not configured');
+  const response = await fetch(`${ATTIO_API}${path}`, {
+    method: init.method || 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    signal: AbortSignal.timeout(25_000),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(String(body?.message || `Attio returned ${response.status}`).slice(0, 1000));
+  }
+  return body;
+}
+
+function attioReference(object: string, recordId: string) {
+  return [{ target_object: object, target_record_id: recordId }];
+}
+
+async function createOrFindAttioDeal(lead: any) {
+  const projectRecordId = String(
+    lead.attio_project_record_id || lead.attio_record_id || '',
+  ).trim();
+  if (!projectRecordId) throw new Error('The positive reply has no linked Attio Project');
+
+  const existing = await attioRequest('/objects/deals/records/query', {
+    method: 'POST',
+    body: {
+      filter: {
+        project: {
+          target_object: 'projects',
+          target_record_id: projectRecordId,
+        },
+      },
+      limit: 2,
+    },
+  });
+  const current = existing?.data?.[0];
+  if (current?.id?.record_id) {
+    return {
+      recordId: String(current.id.record_id),
+      webUrl: String(current.web_url || ''),
+      created: false,
+    };
+  }
+
+  const values: Record<string, unknown> = {
+    name: `${lead.project_name} — GSD opportunity`,
+    stage: 'Enquiry',
+    owner: [{
+      referenced_actor_type: 'workspace-member',
+      referenced_actor_id: Deno.env.get('ATTIO_DEAL_OWNER_ID') || DEFAULT_DEAL_OWNER_ID,
+    }],
+    project: attioReference('projects', projectRecordId),
+  };
+  if (lead.attio_person_record_id) {
+    values.associated_people = attioReference('people', String(lead.attio_person_record_id));
+  }
+  if (lead.attio_company_record_id) {
+    values.associated_company = attioReference('companies', String(lead.attio_company_record_id));
+  }
+
+  const created = await attioRequest('/objects/deals/records', {
+    method: 'POST',
+    body: { data: { values } },
+  });
+  if (!created?.data?.id?.record_id) {
+    throw new Error('Attio did not return the created Deal');
+  }
+  return {
+    recordId: String(created.data.id.record_id),
+    webUrl: String(created.data.web_url || ''),
+    created: true,
+  };
+}
+
+async function persistReplyOutcome(
+  db: any,
+  lead: any,
+  providerMessageId: string,
+  replyExcerpt: string,
+) {
+  const { data: existing, error: existingError } = await db
+    .from('outreach_reply_outcomes')
+    .select('*')
+    .eq('provider_message_id', providerMessageId)
+    .maybeSingle();
+  if (existingError) throw databaseError('Could not check the reply outcome audit', existingError);
+  if (existing) return existing;
+
+  const classification = classifyProjectReply(replyExcerpt);
+  const now = new Date().toISOString();
+  let actionStatus = classification.outcome === 'manual_review' ? 'not_required' : 'completed';
+  let actionError: string | null = null;
+  let attioDealRecordId = String(lead.attio_deal_record_id || '').trim();
+  let attioDealUrl = String(lead.attio_deal_url || '').trim();
+  let projectDisposition = classification.outcome === 'negative'
+    ? 'dead'
+    : classification.outcome === 'manual_review'
+      ? 'manual_review'
+      : 'deal_created';
+
+  if (classification.outcome === 'positive' && !attioDealRecordId) {
+    try {
+      const deal = await createOrFindAttioDeal(lead);
+      attioDealRecordId = deal.recordId;
+      attioDealUrl = deal.webUrl;
+    } catch (error) {
+      actionStatus = 'error';
+      actionError = String(error instanceof Error ? error.message : error).slice(0, 1000);
+      projectDisposition = 'manual_review';
+    }
+  }
+
+  const { data: outcome, error: outcomeError } = await db
+    .from('outreach_reply_outcomes')
+    .insert({
+      outreach_lead_id: lead.id,
+      project_id: lead.project_id,
+      provider_message_id: providerMessageId,
+      outcome: classification.outcome,
+      confidence: classification.confidence,
+      evidence: classification.evidence,
+      reply_excerpt: String(replyExcerpt || '').slice(0, 1000),
+      action_status: actionStatus,
+      action_error: actionError,
+      attio_deal_record_id: attioDealRecordId || null,
+      attio_deal_url: attioDealUrl || null,
+      processed_at: now,
+    })
+    .select('*')
+    .single();
+  if (outcomeError) throw databaseError('Could not save the reply outcome audit', outcomeError);
+
+  const { error: leadOutcomeError } = await db
+    .from('outreach_leads')
+    .update({
+      reply_outcome: classification.outcome,
+      reply_outcome_confidence: classification.confidence,
+      reply_outcome_evidence: classification.evidence,
+      reply_message_id: providerMessageId,
+      outcome_processed_at: now,
+      outcome_action_status: actionStatus,
+      outcome_action_error: actionError,
+      attio_deal_record_id: attioDealRecordId || null,
+      attio_deal_url: attioDealUrl || null,
+      updated_at: now,
+    })
+    .eq('id', lead.id);
+  if (leadOutcomeError) throw databaseError('Could not update the outreach reply outcome', leadOutcomeError);
+
+  const projectUpdate: Record<string, unknown> = {
+    outreach_disposition: projectDisposition,
+  };
+  if (classification.outcome === 'negative') {
+    projectUpdate.outreach_closed_at = now;
+    projectUpdate.outreach_close_reason = classification.evidence;
+  }
+  const { error: projectError } = await db
+    .from('ccs_projects')
+    .update(projectUpdate)
+    .eq('project_id', lead.project_id);
+  if (projectError) throw databaseError('Could not update the project outreach disposition', projectError);
+
+  return outcome;
+}
+
 async function advanceMailboxCursor(
   db: any,
   mailboxEmail: string,
@@ -167,6 +342,7 @@ Deno.serve(async req => {
     } while (pageToken);
 
     let processed = 0;
+    let outcomesProcessed = 0;
 
     for (const messageId of messageIds) {
       const message = await gmail(token, `/messages/${encodeURIComponent(messageId)}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject`);
@@ -237,6 +413,11 @@ Deno.serve(async req => {
         throw new Error(`Could not update the outreach lead for Gmail message ${messageId}`);
       }
 
+      if (!isBounce && !isOptOut) {
+        await persistReplyOutcome(db, lead, messageId, snippet);
+        outcomesProcessed += 1;
+      }
+
       if (isOptOut) {
         const suppressionEmail = String(lead.recipient_email || from).trim().toLowerCase();
         const { error: suppressionError } = await db.from('outreach_suppressions').insert({
@@ -263,6 +444,7 @@ Deno.serve(async req => {
       pages_fetched: pagesFetched,
       messages_examined: messageIds.length,
       processed,
+      outcomes_processed: outcomesProcessed,
       gmail_history_id: nextCursor,
     });
   } catch (error) {
