@@ -26,6 +26,16 @@ files are kept as no-ops (`select 1;`) so the migration ledgers line up:
 
 The outreach jobs were unscheduled out of band after those migrations ran.
 
+## Proposed jobs (not scheduled)
+
+| jobname | schedule (UTC) | calls | auth | status |
+| --- | --- | --- | --- | --- |
+| `tender-pull-daily` | `0 4,5 * * *` | `pull-tender-notices` | Vault `tender_pull_secret`, sent as `x-tender-pull-secret` | Awaiting approval; see README "Tenders" |
+
+The tender pull uses its own header name, `x-tender-pull-secret`, not
+`x-sitefinder-cron-secret`. The function pulls only at 05:00 Europe/London and
+records `skipped` for the other call.
+
 ## Command shape (for an approved reinstall only)
 
 Every job posts to an Edge Function with a secret read from Vault at run time.

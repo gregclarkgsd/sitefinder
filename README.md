@@ -76,6 +76,114 @@ Setting it to `true` is an explicit operational decision to mirror every new or
 changed CCS project and should be used only after reconciling that broader CRM
 model with the approved-lead handoff.
 
+## Tenders
+
+The Tenders tab lists public-sector notices from Find a Tender (FTS) and
+Contracts Finder (CF), scored per workspace against that workspace's own
+tender settings. Both feeds are public OCDS APIs read with GET only; SiteFinder
+never posts to them. Notice data is shown with the attribution "Contains public
+sector information licensed under the Open Government Licence v3.0".
+
+Two Edge Functions are involved:
+
+- `pull-tender-notices` reads both feeds, stores notices in `tender_notices`
+  (deduplicated on the OCID), records one `tender_pull_runs` row per source and
+  re-scores leads for every workspace with settings. `verify_jwt` is off; the
+  `x-tender-pull-secret` header is the gate.
+- `rescore-tender-leads` is called by the settings panel after an admin saves.
+  It checks workspace admin membership with the caller's JWT.
+
+### Environment
+
+| Name | Where | Purpose |
+| --- | --- | --- |
+| `TENDER_PULL_SECRET` | Edge Function secret, and Vault secret `tender_pull_secret` | Shared secret for `pull-tender-notices` |
+| `TENDER_FTS_BASE_URL` | Edge Function secret (optional) | Override the FTS base URL, e.g. for a mirror |
+| `TENDER_CF_BASE_URL` | Edge Function secret (optional) | Override the CF base URL |
+
+Do not commit any value. `.env.example` lists names only.
+
+### Dry run (writes nothing)
+
+```bash
+node scripts/tender-pull-dry-run.mjs --days 1 --max-pages 2 \
+  --settings scripts/tender-settings.sample.json --out /tmp/tender-dry-run.json
+```
+
+The script fetches the live public feeds, normalises and scores the notices in
+memory and prints per-source totals and the top ten scores. It never connects
+to a database; `--out` only writes a local file. It exits non-zero if any
+source failed. Use `--from`/`--to` (ISO timestamps) for an explicit window and
+`--sources fts` or `--sources cf` for one feed.
+
+### Production install (only after explicit approval)
+
+Nothing below has been done in production. The job is **not scheduled**.
+
+1. Apply the tender migrations through the normal reviewed migration process.
+2. Generate a secret and set it twice, with the same value: as the Edge
+   Function secret `TENDER_PULL_SECRET` and as the Vault secret
+   `tender_pull_secret`.
+3. Deploy `pull-tender-notices` and `rescore-tender-leads`.
+4. Run one manual pull (below) and check both sources report `ok` or `empty`.
+5. Schedule the daily job:
+
+```sql
+select cron.schedule(
+  'tender-pull-daily',
+  '0 4,5 * * *',
+  $$
+  select net.http_post(
+    url := 'https://<project-ref>.supabase.co/functions/v1/pull-tender-notices',
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'x-tender-pull-secret', (select decrypted_secret from vault.decrypted_secrets where name = 'tender_pull_secret')
+    ),
+    body := '{}'::jsonb
+  );
+  $$
+);
+```
+
+Cron runs in UTC, so the job fires at 04:00 and 05:00 UTC. The function only
+pulls when the Europe/London hour is 05, which keeps the pull at 05:00 London
+time through BST changes. The other call records `skipped` runs and returns.
+
+### Manual runs and backfill
+
+All calls need the `x-tender-pull-secret` header.
+
+- `?mode=manual` pulls now with the same window rules as the scheduled run:
+  resume a partial run from its cursor, otherwise start one hour before the
+  last good window, otherwise the last 24 hours.
+- `?from=<ISO>&to=<ISO>` backfills one explicit window of at most 8 days. For a
+  90-day backfill, call it in 7-day slices, oldest first.
+- If a backfill response has a source with `status: "partial"`, repeat the same
+  call with `&cursor=<next_cursor from that source>` (and `&sources=<that
+  source>`) to continue. Backfill runs never move the scheduled pull's window.
+- `sources=fts,cf` limits the feeds; `max_pages=N` (1 to 20, default 10) caps
+  pages per source per call. The default of 10 is a guess at what fits inside
+  the Edge Function wall-clock limit.
+
+Requests are throttled to one every six seconds per source, and 429 and 503
+responses are retried with `Retry-After`.
+
+### Run statuses and the stale-data banner
+
+| Status | Meaning |
+| --- | --- |
+| `ok` | The window was read in full and notices were stored |
+| `empty` | The window was read in full and the feed had nothing new |
+| `partial` | Some pages were stored, then a page failed, the page cap was reached or re-scoring failed; the next run resumes from `next_cursor` |
+| `failed` | Nothing usable was read (HTTP error, non-JSON or malformed response) |
+| `skipped` | A scheduled call outside 05:00 London; no feed was read |
+
+A failed pull is never shown as an empty list. The Tenders tab shows a red
+banner per source, "feed broken since <time>: data may be out of date", when
+that source's latest run is `failed` or `partial`, or when it has had no `ok`
+or `empty` run for 26 hours. The HTTP response is 502 only when every source
+failed.
+
 ## Data source
 
 - Marker feed: `https://ccsfilestore.blob.core.windows.net/constructionmap/live/json/sitemarkers.json`
