@@ -1,23 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  ALREADY_PAIRED_MIGRATIONS,
   EXPECTED_REMOTE_TO_LOCAL,
   REQUIRED_LOCAL_ONLY_MIGRATION,
   verifyMigrationSnapshot,
 } from './scripts/verify-supabase-migration-drift.mjs';
 
-const expectedLocalStems = [
+const repairedLocalStems = [
   ...Object.values(EXPECTED_REMOTE_TO_LOCAL),
   REQUIRED_LOCAL_ONLY_MIGRATION,
 ];
-const expectedLocalFiles = expectedLocalStems.map((value) => `${value}.sql`);
-const expectedLocalVersions = expectedLocalStems.map((value) => value.split('_')[0]);
+const expectedLocalFiles = [...repairedLocalStems, ...ALREADY_PAIRED_MIGRATIONS].map((value) => `${value}.sql`);
+const expectedLocalVersions = repairedLocalStems.map((value) => value.split('_')[0]);
+const alreadyPairedVersions = ALREADY_PAIRED_MIGRATIONS.map((value) => value.split('_')[0]);
+const allLocalVersions = [...expectedLocalVersions, ...alreadyPairedVersions];
 const expectedOldRemote = Object.keys(EXPECTED_REMOTE_TO_LOCAL);
-const exactMappingPairs = Object.entries(EXPECTED_REMOTE_TO_LOCAL);
+const exactMappingPairs = [
+  ...Object.entries(EXPECTED_REMOTE_TO_LOCAL),
+  ...ALREADY_PAIRED_MIGRATIONS.map((stem) => [stem.split('_')[0], stem]),
+];
 const exactSnapshot = JSON.stringify({ remote_to_local: exactMappingPairs });
 
 function cliTable(remote, local, { ansi = false, prose = '' } = {}) {
   return cliRows([
+    ...alreadyPairedVersions.map((version) => pairedRow(version)),
     ...remote.map((version) => `                  │ \`${version}\` │ 2026-07-30 00:00:00`),
     ...local.map((version) => `  \`${version}\` │                  │ 2026-07-30 00:00:00`),
   ], { ansi, prose });
@@ -35,7 +42,7 @@ function pairedRow(localVersion, remoteVersion = localVersion) {
 }
 
 function stateTable(state) {
-  const paired = expectedLocalVersions.map((version) => pairedRow(version));
+  const paired = allLocalVersions.map((version) => pairedRow(version));
   if (state === 'intermediate') {
     return cliRows([
       ...paired,
@@ -49,30 +56,31 @@ function stateTable(state) {
 test('accepts the exact verified semantic before-state mapping', () => {
   const report = verifyMigrationSnapshot(exactSnapshot, expectedLocalFiles);
   assert.equal(report.state, 'before');
-  assert.equal(report.remoteCount, 20);
-  assert.equal(report.localCount, 21);
+  assert.equal(report.remoteCount, 27);
+  assert.equal(report.localCount, 28);
 });
 
-test('accepts the exact 41-row ANSI/backtick CLI before-state fingerprint', () => {
+test('accepts the exact 48-row ANSI/backtick CLI before-state fingerprint', () => {
   const snapshot = cliTable(expectedOldRemote, expectedLocalVersions, { ansi: true });
   const report = verifyMigrationSnapshot(snapshot, expectedLocalFiles, 'before');
-  assert.equal(report.remoteCount, 20);
+  assert.equal(report.remoteCount, 27);
 });
 
 test('accepts Supabase-style JSON migrations with unpaired before-state rows', () => {
   const migrations = [
     ...expectedOldRemote.map((remote) => ({ local: '', remote })),
     ...expectedLocalVersions.map((local) => ({ local, remote: '' })),
+    ...alreadyPairedVersions.map((version) => ({ local: version, remote: version })),
   ];
   const report = verifyMigrationSnapshot(JSON.stringify({ migrations }), expectedLocalFiles, 'before');
-  assert.equal(report.localCount, 21);
+  assert.equal(report.localCount, 28);
 });
 
 test('accepts and distinguishes intermediate and after repair states', () => {
   const intermediate = stateTable('intermediate');
   const after = stateTable('after');
-  assert.equal(verifyMigrationSnapshot(intermediate, expectedLocalFiles, 'intermediate').remoteCount, 41);
-  assert.equal(verifyMigrationSnapshot(after, expectedLocalFiles, 'after').remoteCount, 21);
+  assert.equal(verifyMigrationSnapshot(intermediate, expectedLocalFiles, 'intermediate').remoteCount, 48);
+  assert.equal(verifyMigrationSnapshot(after, expectedLocalFiles, 'after').remoteCount, 28);
 });
 
 test('rejects impossible paired and unpaired CLI row topology in every state', () => {
@@ -82,7 +90,7 @@ test('rejects impossible paired and unpaired CLI row topology in every state', (
   ]);
   assert.throws(
     () => verifyMigrationSnapshot(impossibleBefore, expectedLocalFiles, 'before'),
-    /row topology: expected 0 paired/,
+    /row topology: expected 7 paired/,
   );
 
   const impossibleIntermediate = cliTable(
@@ -91,7 +99,7 @@ test('rejects impossible paired and unpaired CLI row topology in every state', (
   );
   assert.throws(
     () => verifyMigrationSnapshot(impossibleIntermediate, expectedLocalFiles, 'intermediate'),
-    /row topology: expected 21 paired/,
+    /row topology: expected 28 paired/,
   );
 
   const rotated = [...expectedLocalVersions.slice(1), expectedLocalVersions[0]];
@@ -246,5 +254,35 @@ test('ignores prose mentioning local and remote before the exact table header', 
   const snapshot = cliTable(expectedOldRemote, expectedLocalVersions, {
     prose: 'Local and remote histories were captured for review.\nLOCAL │ REMOTE │ NOTES\n',
   });
-  assert.equal(verifyMigrationSnapshot(snapshot, expectedLocalFiles).remoteCount, 20);
+  assert.equal(verifyMigrationSnapshot(snapshot, expectedLocalFiles).remoteCount, 27);
+});
+
+test('reports newer local migrations as pending instead of rejecting them', () => {
+  const pending = '20261101000000_add_example_pending_change';
+  const report = verifyMigrationSnapshot(exactSnapshot, [...expectedLocalFiles, `${pending}.sql`]);
+  assert.deepEqual(report.pendingMigrations, [pending]);
+  assert.equal(report.localCount, 28);
+
+  const table = cliTable(expectedOldRemote, [...expectedLocalVersions, '20261101000000']);
+  assert.deepEqual(
+    verifyMigrationSnapshot(table, [...expectedLocalFiles, `${pending}.sql`]).pendingMigrations,
+    [pending],
+  );
+});
+
+test('rejects an unknown local migration older than the reconciled history', () => {
+  assert.throws(
+    () => verifyMigrationSnapshot(exactSnapshot, [...expectedLocalFiles, '20260801000000_sneaky_backdated.sql']),
+    /Invalid local migration value/,
+  );
+});
+
+test('rejects a remote-only migration newer than the reconciled history', () => {
+  const table = cliRows([
+    ...alreadyPairedVersions.map((version) => pairedRow(version)),
+    ...expectedOldRemote.map((version) => `                  │ \`${version}\` │ 2026-07-30 00:00:00`),
+    ...expectedLocalVersions.map((version) => `  \`${version}\` │                  │ 2026-07-30 00:00:00`),
+    `                  │ \`20261101000000\` │ 2026-07-30 00:00:00`,
+  ]);
+  assert.throws(() => verifyMigrationSnapshot(table, expectedLocalFiles), /remote history: unexpected 20261101000000/);
 });

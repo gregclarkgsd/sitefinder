@@ -32,14 +32,43 @@ export const EXPECTED_REMOTE_TO_LOCAL = Object.freeze({
 
 export const REQUIRED_LOCAL_ONLY_MIGRATION = '20260727110105_add_public_ccs_schedule';
 
-const EXPECTED_LOCAL_STEMS = Object.freeze([
+// Applied in production under the same version as the repository filename, so
+// they are already paired and the history-only repair leaves them untouched.
+export const ALREADY_PAIRED_MIGRATIONS = Object.freeze([
+  '20260816111759_schedule_outreach_watch_and_followups',
+  '20260816114627_add_sitefinder_outreach_reply_outcomes',
+  '20260816123552_add_outreach_programme_snapshot',
+  '20260816152759_humanise_sitefinder_outreach_copy',
+  '20260816175256_schedule_initial_outreach',
+  '20261004214803_phase3_presend_check',
+  '20261007145812_sitefinder_multi_contact_per_project',
+]);
+
+// Local migrations newer than this are not yet applied anywhere the guard
+// knows about. They are reported as pending and excluded from the fingerprint.
+export const LAST_RECONCILED_VERSION = '20261007145812';
+const PENDING_STEM = /^(\d{14})_[a-z0-9_]+$/;
+const PENDING_VERSION = /^\d{14}$/;
+
+const REPAIRED_LOCAL_STEMS = Object.freeze([
   ...Object.values(EXPECTED_REMOTE_TO_LOCAL),
   REQUIRED_LOCAL_ONLY_MIGRATION,
+]);
+const EXPECTED_LOCAL_STEMS = Object.freeze([
+  ...REPAIRED_LOCAL_STEMS,
+  ...ALREADY_PAIRED_MIGRATIONS,
 ]);
 const LOCAL_STEM_SET = new Set(EXPECTED_LOCAL_STEMS);
 const LOCAL_VERSION_TO_STEM = new Map(EXPECTED_LOCAL_STEMS.map((stem) => [stem.split('_')[0], stem]));
 const EXPECTED_OLD_REMOTE = Object.freeze(Object.keys(EXPECTED_REMOTE_TO_LOCAL));
+const ALREADY_PAIRED_VERSIONS = Object.freeze(ALREADY_PAIRED_MIGRATIONS.map((stem) => stem.split('_')[0]));
 const EXPECTED_LOCAL_VERSIONS = Object.freeze([...LOCAL_VERSION_TO_STEM.keys()]);
+
+function isPendingMigration(value) {
+  const text = String(value ?? '');
+  const version = PENDING_VERSION.test(text) ? text : text.match(PENDING_STEM)?.[1];
+  return Boolean(version) && version > LAST_RECONCILED_VERSION && !LOCAL_VERSION_TO_STEM.has(version);
+}
 
 const stripTerminalFormatting = (value) => String(value)
   .replace(/\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g, '')
@@ -75,6 +104,8 @@ function parseLocal(value, { requireStem = false, displayCell = false } = {}) {
   }
   if (LOCAL_STEM_SET.has(local)) return local;
   if (!requireStem && LOCAL_VERSION_TO_STEM.has(local)) return LOCAL_VERSION_TO_STEM.get(local);
+  if (PENDING_STEM.test(local) && isPendingMigration(local)) return local;
+  if (!requireStem && isPendingMigration(local)) return local;
   throw new Error(
     `Invalid local migration value "${local}"; expected an exact known version${requireStem ? ' and filename stem' : ''}.`,
   );
@@ -192,7 +223,7 @@ function findDuplicates(values) {
 }
 
 function expectedRemoteForState(state) {
-  if (state === 'before') return EXPECTED_OLD_REMOTE;
+  if (state === 'before') return [...EXPECTED_OLD_REMOTE, ...ALREADY_PAIRED_VERSIONS];
   if (state === 'intermediate') return [...EXPECTED_OLD_REMOTE, ...EXPECTED_LOCAL_VERSIONS];
   return EXPECTED_LOCAL_VERSIONS;
 }
@@ -201,10 +232,12 @@ function validateTimestampTopology(rows, state, errors) {
   const paired = rows.filter((row) => row.remote && row.local);
   const remoteOnly = rows.filter((row) => row.remote && !row.local);
   const localOnly = rows.filter((row) => !row.remote && row.local);
+  const alreadyPaired = ALREADY_PAIRED_MIGRATIONS.length;
+  const repaired = REPAIRED_LOCAL_STEMS.length;
   const expectedCounts = {
-    before: { paired: 0, remoteOnly: 20, localOnly: 21 },
-    intermediate: { paired: 21, remoteOnly: 20, localOnly: 0 },
-    after: { paired: 21, remoteOnly: 0, localOnly: 0 },
+    before: { paired: alreadyPaired, remoteOnly: EXPECTED_OLD_REMOTE.length, localOnly: repaired },
+    intermediate: { paired: alreadyPaired + repaired, remoteOnly: EXPECTED_OLD_REMOTE.length, localOnly: 0 },
+    after: { paired: alreadyPaired + repaired, remoteOnly: 0, localOnly: 0 },
   }[state];
 
   if (
@@ -238,17 +271,27 @@ function validateTimestampTopology(rows, state, errors) {
 
 export function verifyMigrationSnapshot(snapshot, localFilenames, state = 'before') {
   if (!REPAIR_STATES.has(state)) throw new Error(`Unknown repair state "${state}".`);
-  const { rows, strength } = parseMigrationSnapshot(snapshot);
+  const parsed = parseMigrationSnapshot(snapshot);
+  const { strength } = parsed;
   const errors = [];
+  const pendingRows = parsed.rows.filter((row) => row.local && isPendingMigration(row.local));
+  for (const row of pendingRows) {
+    if (row.remote && row.remote !== String(row.local).slice(0, 14)) {
+      errors.push(`pending migration ${row.local} is paired with a different remote version ${row.remote}`);
+    }
+  }
+  const rows = parsed.rows.filter((row) => !pendingRows.includes(row));
   const remoteValues = rows.map((row) => row.remote).filter(Boolean);
   const snapshotLocal = rows.map((row) => row.local).filter(Boolean);
-  const localFiles = localFilenames.map((filename) => {
+  const allLocalFiles = localFilenames.map((filename) => {
     const rawFilename = String(filename ?? '');
     if (!rawFilename.endsWith('.sql')) {
       throw new Error(`Invalid migration filename "${rawFilename}"; expected an exact lowercase .sql basename.`);
     }
     return parseLocal(rawFilename.slice(0, -4), { requireStem: true });
   });
+  const pendingLocalFiles = allLocalFiles.filter(isPendingMigration);
+  const localFiles = allLocalFiles.filter((stem) => !isPendingMigration(stem));
 
   const duplicateRemote = findDuplicates(remoteValues);
   const duplicateSnapshotLocal = findDuplicates(snapshotLocal);
@@ -262,9 +305,18 @@ export function verifyMigrationSnapshot(snapshot, localFilenames, state = 'befor
 
   if (strength === 'mapping') {
     if (state !== 'before') errors.push('explicit remote_to_local mappings are valid only for the before state');
-    compareSets(snapshotLocal, Object.values(EXPECTED_REMOTE_TO_LOCAL), 'mapped local history', errors);
+    compareSets(
+      snapshotLocal,
+      [...Object.values(EXPECTED_REMOTE_TO_LOCAL), ...ALREADY_PAIRED_MIGRATIONS],
+      'mapped local history',
+      errors,
+    );
     const actualMapping = new Map(rows.map((row) => [row.remote, row.local]));
-    for (const [remote, expectedLocalName] of Object.entries(EXPECTED_REMOTE_TO_LOCAL)) {
+    const expectedMapping = [
+      ...Object.entries(EXPECTED_REMOTE_TO_LOCAL),
+      ...ALREADY_PAIRED_MIGRATIONS.map((stem) => [stem.split('_')[0], stem]),
+    ];
+    for (const [remote, expectedLocalName] of expectedMapping) {
       if (actualMapping.get(remote) !== expectedLocalName) {
         errors.push(`mapping: ${remote} must map to ${expectedLocalName}`);
       }
@@ -280,6 +332,7 @@ export function verifyMigrationSnapshot(snapshot, localFilenames, state = 'befor
     remoteCount: expectedRemoteForState(state).length,
     localCount: localFiles.length,
     localOnlyMigration: REQUIRED_LOCAL_ONLY_MIGRATION,
+    pendingMigrations: pendingLocalFiles,
   };
 }
 
@@ -309,7 +362,10 @@ function cli() {
   const report = verifyMigrationSnapshot(snapshot, localFilenames, state);
   process.stdout.write(
     `Verified ${report.state} migration-history state: ${report.remoteCount} remote, `
-    + `${report.localCount} local; local-only ${report.localOnlyMigration}.\n`,
+    + `${report.localCount} local; local-only ${report.localOnlyMigration}.\n`
+    + (report.pendingMigrations.length
+      ? `Pending local migrations not yet applied: ${report.pendingMigrations.join(', ')}.\n`
+      : ''),
   );
 }
 

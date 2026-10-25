@@ -41,8 +41,11 @@ Those commands can misinterpret history drift as unapplied schema work.
 | `20260729213700` | `20260729203556_enforce_research_candidate_approval` |
 | `20260730112908` | `20260730103000_add_licensed_research_email_status` |
 
-The expected final state is 21 local and remote history entries: the 20 mapped
-entries above plus `20260727110105_add_public_ccs_schedule` marked as applied.
+The expected final state is 28 local and remote history entries: the 20 mapped
+entries above, `20260727110105_add_public_ccs_schedule` marked as applied, and
+the 7 migrations production already records under their repository version
+(`20260816111759` to `20261007145812`). The repair commands below never touch
+those 7.
 
 ## Preflight and backup
 
@@ -79,7 +82,11 @@ entries above plus `20260727110105_add_public_ccs_schedule` marked as applied.
    separately reviewed restoration after a fully completed repair because the
    old remote timestamps do not have corresponding local migration files.
 4. Confirm the repository is clean and at the reviewed commit. Confirm that
-   `supabase/migrations` contains exactly the 21 expected SQL filenames.
+   `supabase/migrations` contains the 21 repaired SQL filenames above plus the
+   7 migrations production already records under their repository version
+   (`20260816111759` … `20261007145812`, listed in
+   `ALREADY_PAIRED_MIGRATIONS` in the guard). The guard reports any newer
+   local migration as pending and leaves it out of the fingerprint.
 5. Run the repository guard against the saved snapshot. It is read-only and
    must pass before any human enters a repair command:
 
@@ -133,7 +140,8 @@ npx --no-install supabase migration repair --linked --status applied 20260716000
 ```
 
 Capture and verify the intermediate state before removing anything. It must
-contain 21 paired local/remote versions plus the original 20 remote-only
+contain 28 paired local/remote versions (21 repaired plus 7 already paired)
+plus the original 20 remote-only
 versions:
 
 ```sh
