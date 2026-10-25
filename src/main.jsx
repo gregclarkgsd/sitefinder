@@ -318,7 +318,7 @@ function App({session,cloudEnabled}){
       {activeView==='insights'&&<Insights projects={projects} saved={saved} contractorStats={contractorStats}/>}
       {activeView==='tasks'&&<TaskDashboard tasks={tasks} projects={projects} openProject={open} toggleTask={toggleTask} deleteTask={deleteTask}/>}
       {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} mailboxes={mailboxes} mailboxesLoading={mailboxesLoading} mailboxError={mailboxError} connectMailbox={connectMailbox} updateLead={updateOutreach} approveAndSend={approveAndSendOutreach} focusProjectId={outreachFocusProjectId}/>}
-      {activeView==='tenders'&&<TendersPage cloudEnabled={cloudEnabled} tenant={tenant}/>}
+      {activeView==='tenders'&&<TendersPage cloudEnabled={cloudEnabled} tenant={tenant} session={session}/>}
       {activeView==='research'&&<ResearchAgentPage cloudEnabled={cloudEnabled} session={session} projects={projects}/>}
       {activeView==='contractors'&&<Contractors stats={contractorStats} onSelect={name=>{updateDraftFilter('contractor',name);setFilters(x=>({...x,contractor:name}));goToView('projects')}}/>}
     </main>

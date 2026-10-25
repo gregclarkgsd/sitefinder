@@ -41,3 +41,24 @@
   .tenders-page{padding:12px}
   .tender-filters label:not(.tender-search){flex:1 1 45%}
 }
+.tender-drawer{position:fixed;top:0;right:0;bottom:0;z-index:50;display:flex;flex-direction:column;gap:12px;width:min(480px,100vw);padding:18px 20px;overflow-y:auto;border-left:1px solid var(--line);background:#fff;box-shadow:-12px 0 32px #0b1e3a1f}
+.tender-drawer-head{display:flex;align-items:center;justify-content:space-between}
+.tender-drawer-head .tender-chip:first-child{margin-left:0}
+.tender-drawer h2{margin:0;font-size:17px;line-height:1.3}
+.tender-buyer{margin:-6px 0 0;color:var(--muted)}
+.tender-source-link{display:inline-flex;align-items:center;gap:6px;color:#0b5cab;font-weight:600}
+.tender-actions{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px;padding:10px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.tender-actions label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted)}
+.tender-actions select{min-height:34px;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:#fff;color:inherit}
+.tender-actions button{display:flex;align-items:center;gap:6px;min-height:34px;padding:0 11px;border:1px solid var(--line);border-radius:6px;background:#fff;font-weight:600}
+.tender-actions button:disabled{cursor:not-allowed;opacity:.5}
+.tender-drawer .muted{margin:0;color:var(--muted);font-size:12px}
+.tender-dismiss-reason{margin:0;padding:8px 10px;border-radius:6px;background:#f8fafc;font-size:12px}
+.tender-why h3,.tender-description h3{margin:0 0 6px;font-size:13px}
+.tender-why ul{margin:0;padding:0;list-style:none}
+.tender-why li{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed var(--line);font-size:12px}
+.tender-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px}
+.tender-field span{display:block;color:var(--muted);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.tender-field div{margin-top:2px;font-size:12px;overflow-wrap:anywhere}
+.tender-description p{margin:0;white-space:pre-wrap;font-size:12px;line-height:1.5}
+.tender-ogl{color:var(--muted)}

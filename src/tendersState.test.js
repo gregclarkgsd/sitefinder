@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  applyLeadChanges,
   compareLeads,
   EMPTY_TENDER_FILTERS,
   filterLeads,
   formatDeadline,
   formatTenderValue,
+  leadActionChanges,
   matchedTerms,
   OGL_NOTICE,
   regionOptions,
+  scoreReasons,
   sourceHealth,
+  statusLabel,
 } from './tendersState.js';
 
 const now = Date.parse('2026-10-25T12:00:00Z');
@@ -117,4 +121,39 @@ test('formats values and deadlines', () => {
 
 test('carries the exact OGL attribution', () => {
   assert.equal(OGL_NOTICE, 'Contains public sector information licensed under the Open Government Licence v3.0');
+});
+
+test('maps lead actions to status changes', () => {
+  assert.deepEqual(leadActionChanges('save'), {status: 'qualifying', dismiss_reason: null});
+  assert.deepEqual(leadActionChanges('pursue'), {status: 'bidding', dismiss_reason: null});
+  assert.deepEqual(leadActionChanges('dismiss', {reason: '  Out of area  '}), {status: 'dismissed', dismiss_reason: 'Out of area'});
+  assert.deepEqual(leadActionChanges('dismiss', {reason: ''}), {status: 'dismissed', dismiss_reason: null});
+  assert.equal(leadActionChanges('dismiss', {reason: 'x'.repeat(600)}).dismiss_reason.length, 500);
+  assert.deepEqual(leadActionChanges('restore'), {status: 'to_qualify', dismiss_reason: null});
+  assert.deepEqual(leadActionChanges('status', {status: 'won'}), {status: 'won', dismiss_reason: null});
+  assert.throws(() => leadActionChanges('status', {status: 'archived'}), /Unknown lead status/u);
+  assert.throws(() => leadActionChanges('push_to_crm'), /Unknown lead action/u);
+});
+
+test('applies changes to one lead without mutating the list', () => {
+  const list = [lead('a', 50), lead('b', 40)];
+  const next = applyLeadChanges(list, 'b', {status: 'bidding'});
+  assert.equal(next[1].status, 'bidding');
+  assert.equal(list[1].status, 'to_qualify');
+  assert.equal(next[0], list[0]);
+});
+
+test('uses tenant stage labels with defaults', () => {
+  assert.equal(statusLabel('bid_no_bid', null), 'Bid / no-bid');
+  assert.equal(statusLabel('bidding', {stages: {bidding: 'Preparing bid'}}), 'Preparing bid');
+  assert.equal(statusLabel('won', {stages: {won: '  '}}), 'Won');
+});
+
+test('explains the score from the breakdown', () => {
+  assert.deepEqual(scoreReasons({signals: [{signal: 'keyword_title', weight: 25, matched: ['painting']}, {signal: 'buyer_type', weight: 10, matched: []}]}), [
+    {label: 'Keyword in title', weight: 25, matched: ['painting']},
+    {label: 'Council or social housing buyer', weight: 10, matched: []},
+  ]);
+  assert.deepEqual(scoreReasons({blocked: true, blocked_by: ['Example'], signals: []}), [{label: 'Blocked buyer', weight: null, matched: ['Example']}]);
+  assert.deepEqual(scoreReasons(null), []);
 });
