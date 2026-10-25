@@ -9,6 +9,7 @@ export type AttioAttribute = {
   is_archived: boolean;
   id?: { attribute_id?: string };
   config?: Record<string, unknown>;
+  relationship?: Record<string, unknown> | null;
 };
 
 export type AttioRecord = {
@@ -93,6 +94,14 @@ export class AttioClient {
     const body = await this.request<{ data: AttioRecord[] }>(
       `/objects/${encodeURIComponent(object)}/records/query`,
       { method: 'POST', body: { filter, limit } },
+    );
+    return body.data;
+  }
+
+  async queryRecordsPage(object: string, limit = 100, offset = 0) {
+    const body = await this.request<{ data: AttioRecord[] }>(
+      `/objects/${encodeURIComponent(object)}/records/query`,
+      { method: 'POST', body: { limit, offset } },
     );
     return body.data;
   }

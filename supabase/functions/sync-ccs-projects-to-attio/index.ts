@@ -19,6 +19,7 @@ import { safeBoolean, safeBooleanWithFallback } from '../_shared/values.ts';
 
 const SITEFINDER_URL = 'https://gsd-sitefinder.onrender.com';
 const MAX_BATCH_SIZE = 25;
+const MAX_DEAL_BATCH_SIZE = 100;
 
 type JsonRecord = Record<string, unknown>;
 type DbClient = any;
@@ -358,6 +359,90 @@ function ccsNumber(projectId: string) {
 
 function sitefinderProjectUrl(projectId: string) {
   return `${SITEFINDER_URL}/?project=${encodeURIComponent(projectId)}`;
+}
+
+function currentRecordReference(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  const current = value.find(item => {
+    if (!item || typeof item !== 'object') return false;
+    return (item as JsonRecord).active_until === null
+      || (item as JsonRecord).active_until === undefined;
+  }) as JsonRecord | undefined;
+  const recordId = String(current?.target_record_id || '');
+  const object = String(current?.target_object || '');
+  return recordId ? { recordId, object } : null;
+}
+
+async function backfillDealProjectLinks(
+  attio: AttioClient,
+  objects: Array<{ api_slug: string; singular_noun: string; plural_noun: string }>,
+  body: JsonRecord,
+) {
+  const dealObject = objects.find(object =>
+    object.api_slug === 'deals'
+    || normaliseSlug(object.singular_noun) === 'deal'
+    || normaliseSlug(object.plural_noun) === 'deals'
+  )?.api_slug;
+  if (!dealObject) throw new Error('Attio Deals object was not found');
+
+  const attributes = await attio.listAttributes(dealObject);
+  const oldProject = attributes.find(attribute =>
+    !attribute.relationship
+    && [attribute.api_slug, attribute.title].some(value => normaliseSlug(value) === 'project')
+  );
+  const relatedProject = attributes.find(attribute =>
+    Boolean(attribute.relationship)
+    && [attribute.api_slug, attribute.title].some(value => normaliseSlug(value) === 'related_project')
+  );
+  if (!oldProject || oldProject.type !== 'record-reference') {
+    throw new Error('The existing Deals → Project record-reference field was not found');
+  }
+  if (!relatedProject || relatedProject.type !== 'record-reference' || !relatedProject.is_writable) {
+    throw new Error('The Deals → Related Project relationship was not found or is not writable');
+  }
+
+  const limit = Math.min(MAX_DEAL_BATCH_SIZE, Math.max(1, Number(body.limit) || 25));
+  const offset = Math.max(0, Number(body.offset) || 0);
+  const records = await attio.queryRecordsPage(dealObject, limit, offset);
+  let linked = 0;
+  let alreadyLinked = 0;
+  let withoutProject = 0;
+  const failures: Array<{ deal_id: string; error: string }> = [];
+
+  for (const record of records) {
+    const dealId = record.id.record_id;
+    const existing = currentRecordReference(record.values?.[relatedProject.api_slug]);
+    if (existing) {
+      alreadyLinked++;
+      continue;
+    }
+    const project = currentRecordReference(record.values?.[oldProject.api_slug]);
+    if (!project) {
+      withoutProject++;
+      continue;
+    }
+    try {
+      await attio.updateRecord(dealObject, dealId, {
+        [relatedProject.api_slug]: recordReference(project.object || 'projects', project.recordId),
+      });
+      linked++;
+    } catch (error) {
+      failures.push({ deal_id: dealId, error: errorMessage(error) });
+    }
+  }
+
+  return {
+    ok: failures.length === 0,
+    deal_object: dealObject,
+    requested: records.length,
+    linked,
+    already_linked: alreadyLinked,
+    without_existing_project: withoutProject,
+    failed: failures.length,
+    failures,
+    next_offset: offset + records.length,
+    complete: records.length < limit,
+  };
 }
 
 function ccsSourceUrl(projectId: string) {
@@ -873,7 +958,7 @@ async function upsertProjectRecord(
   putReference(
     values,
     attributes,
-    ['main_contractor', 'main contractor', 'sitefinder_main_contractor'],
+    ['main_contractor_company'],
     'companies',
     contractor?.attio_record_id || null,
     project.main_contractor,
@@ -1092,6 +1177,10 @@ Deno.serve(async (req: Request) => {
     if (!projectObject) throw new Error('Attio Projects object was not found');
 
     const initialAttributes = await attio.listAttributes(projectObject);
+    if (action === 'backfill_deal_project_links') {
+      const result = await backfillDealProjectLinks(attio, objects, body);
+      return json(result, result.failed ? 207 : 200);
+    }
     if (action === 'inspect') {
       return json({
         ok: true,
@@ -1124,10 +1213,9 @@ Deno.serve(async (req: Request) => {
       attributes,
       {
         title: 'Main Contractor Company',
-        api_slug: 'sitefinder_main_contractor',
+        api_slug: 'main_contractor_company',
         type: 'record-reference',
-        description: 'Attio company delivering the project.',
-        aliases: ['main_contractor'],
+        description: 'Bidirectional relationship to the Attio company delivering the project.',
       },
       'companies',
     );
