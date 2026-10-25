@@ -1,11 +1,12 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Search, MapPin, Map as MapIcon, LocateFixed, MoreHorizontal, ArrowUp, ArrowDown, ArrowUpDown, Star, StickyNote, ExternalLink, X, RefreshCw, Building2, SlidersHorizontal, Phone, Mail, CalendarDays, Bookmark, BarChart3, Users, FolderKanban, ChevronLeft, ChevronRight, CheckSquare, Circle, CheckCircle2, Trash2, Plus, Megaphone, Bot } from 'lucide-react';
+import { Search, MapPin, Map as MapIcon, LocateFixed, MoreHorizontal, ArrowUp, ArrowDown, ArrowUpDown, Star, StickyNote, ExternalLink, X, RefreshCw, Building2, SlidersHorizontal, Phone, Mail, CalendarDays, Bookmark, BarChart3, Users, FolderKanban, ChevronLeft, ChevronRight, CheckSquare, Circle, CheckCircle2, Trash2, Plus, Megaphone, Bot, Landmark } from 'lucide-react';
 import './styles.css';
 import './mobile.css';
 import AuthGate from './AuthGate';
 import { CommunicationTimeline, OutreachPage } from './Outreach';
 import { ResearchAgentPage } from './ResearchAgent';
+import { TendersPage } from './Tenders';
 import { canSendInitial } from './outreachState';
 import { apiFetch } from './api';
 import { supabase } from './supabase';
@@ -80,6 +81,7 @@ const fetchAllRows = async (table, columns, pageSize=1000, filterQuery=query=>qu
     if (!data || data.length < pageSize) return {data:rows,error:null};
   }
 };
+const MOBILE_MORE_VIEWS = ['outreach','tenders','insights','contractors'];
 const navItems = [
   {id:'projects',label:'Projects',icon:FolderKanban},
   {id:'map',label:'Map',icon:MapIcon},
@@ -87,6 +89,7 @@ const navItems = [
   {id:'tasks',label:'Tasks',icon:CheckSquare},
   {id:'outreach',label:'Outreach',icon:Megaphone},
   {id:'research',label:'Research Agent',icon:Bot},
+  {id:'tenders',label:'Tenders',icon:Landmark},
   {id:'insights',label:'Insights',icon:BarChart3},
   {id:'contractors',label:'Contractors',icon:Users},
 ];
@@ -289,7 +292,7 @@ function App({session,cloudEnabled}){
   const applyFilters=()=>setFilters({...draftFiltersRef.current});
   const clearFilters=()=>{const empty={location:'',contractor:'',client:'',recency:'',completionWindow:'',opportunity:'',liveOnly:true};draftFiltersRef.current=empty;setDraftFilters(empty);setFilters(empty);setQuery('')};
   return <div className="app">
-    <header><div className="brand"><Building2/><b>GSD</b> SiteFinder</div>{memberships?.length>1&&<select className="tenant-switcher" aria-label="Workspace" value={tenantId||''} onChange={e=>switchTenant(e.target.value)}>{memberships.map(item=><option key={item.tenantId} value={item.tenantId}>{item.name}</option>)}</select>}<nav aria-label="Primary navigation">{navItems.map(({id,label,icon:Icon})=><button key={id} aria-current={activeView===id?'page':undefined} className={`${activeView===id?'active':''} ${['outreach','insights','contractors'].includes(id)?'secondary-nav':''}`} onClick={()=>goToView(id)}><Icon size={16}/>{label}{id==='saved'&&saved.size>0&&<span>{saved.size}</span>}</button>)}<button className={`more-nav ${mobileMoreOpen||['outreach','insights','contractors'].includes(activeView)?'active':''}`} aria-expanded={mobileMoreOpen} aria-controls="mobile-more-menu" aria-current={['outreach','insights','contractors'].includes(activeView)?'page':undefined} onClick={()=>setMobileMoreOpen(value=>!value)}><MoreHorizontal size={18}/>More</button></nav><button className="user" onClick={()=>cloudEnabled&&supabase.auth.signOut()} title={cloudEnabled?'Sign out':'Local preview'}>{session?.user?.email?.slice(0,2).toUpperCase()||'GC'}</button>{mobileMoreOpen&&<div className="mobile-more-menu" id="mobile-more-menu">{navItems.filter(item=>['outreach','insights','contractors'].includes(item.id)).map(({id,label,icon:Icon})=><button key={id} aria-current={activeView===id?'page':undefined} onClick={()=>goToView(id)}><Icon size={17}/>{label}</button>)}</div>}</header>
+    <header><div className="brand"><Building2/><b>GSD</b> SiteFinder</div>{memberships?.length>1&&<select className="tenant-switcher" aria-label="Workspace" value={tenantId||''} onChange={e=>switchTenant(e.target.value)}>{memberships.map(item=><option key={item.tenantId} value={item.tenantId}>{item.name}</option>)}</select>}<nav aria-label="Primary navigation">{navItems.map(({id,label,icon:Icon})=><button key={id} aria-current={activeView===id?'page':undefined} className={`${activeView===id?'active':''} ${MOBILE_MORE_VIEWS.includes(id)?'secondary-nav':''}`} onClick={()=>goToView(id)}><Icon size={16}/>{label}{id==='saved'&&saved.size>0&&<span>{saved.size}</span>}</button>)}<button className={`more-nav ${mobileMoreOpen||MOBILE_MORE_VIEWS.includes(activeView)?'active':''}`} aria-expanded={mobileMoreOpen} aria-controls="mobile-more-menu" aria-current={MOBILE_MORE_VIEWS.includes(activeView)?'page':undefined} onClick={()=>setMobileMoreOpen(value=>!value)}><MoreHorizontal size={18}/>More</button></nav><button className="user" onClick={()=>cloudEnabled&&supabase.auth.signOut()} title={cloudEnabled?'Sign out':'Local preview'}>{session?.user?.email?.slice(0,2).toUpperCase()||'GC'}</button>{mobileMoreOpen&&<div className="mobile-more-menu" id="mobile-more-menu">{navItems.filter(item=>MOBILE_MORE_VIEWS.includes(item.id)).map(({id,label,icon:Icon})=><button key={id} aria-current={activeView===id?'page':undefined} onClick={()=>goToView(id)}><Icon size={17}/>{label}</button>)}</div>}</header>
     {(activeView==='projects'||activeView==='saved'||activeView==='map')&&<aside><div className="aside-title"><b>Filters</b><button onClick={clearFilters}>Clear all</button></div>
       <SelectFilter label="Location" value={draftFilters.location} onChange={location=>updateDraftFilter('location',location)} options={options.locations} allLabel="All locations"/>
       <SelectFilter label="Lead activity" value={draftFilters.recency} onChange={recency=>updateDraftFilter('recency',recency)} options={['new','updated']} allLabel="All project activity"/>
@@ -300,7 +303,7 @@ function App({session,cloudEnabled}){
       <SelectFilter label="Client" value={draftFilters.client} onChange={client=>updateDraftFilter('client',client)} options={options.clients} allLabel="All clients"/>
       <button className="apply" onClick={applyFilters}><SlidersHorizontal size={16}/> Apply filters</button>
     </aside>}
-    <main className={`${(activeView==='insights'||activeView==='contractors'||activeView==='tasks'||activeView==='outreach'||activeView==='research')?'wide':''} ${activeView==='map'?'map-main':''}`}>
+    <main className={`${(activeView==='insights'||activeView==='contractors'||activeView==='tasks'||activeView==='outreach'||activeView==='research'||activeView==='tenders')?'wide':''} ${activeView==='map'?'map-main':''}`}>
       {cloudEnabled&&memberships&&!memberships.length&&<div className="notice" role="alert">Your account is not in a Site Finder workspace yet. Ask a workspace admin to add you.</div>}
       {(activeView==='projects'||activeView==='saved')&&<><section className="toolbar"><div><strong>{visibleProjects.length.toLocaleString()} {activeView==='saved'?'saved':'active'} projects</strong><button className="icon" onClick={load} aria-label="Refresh projects"><RefreshCw size={16}/></button></div><label className="search"><Search size={18}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search projects, contractors, clients, locations…" aria-label="Search projects"/></label><button className="filter-mobile" onClick={()=>document.querySelector('aside')?.classList.toggle('open')}><SlidersHorizontal size={17}/> Filters</button></section>
         {error&&<div className="notice" role="alert">{error}<button onClick={()=>setError('')}><X size={15}/></button></div>}
@@ -315,6 +318,7 @@ function App({session,cloudEnabled}){
       {activeView==='insights'&&<Insights projects={projects} saved={saved} contractorStats={contractorStats}/>}
       {activeView==='tasks'&&<TaskDashboard tasks={tasks} projects={projects} openProject={open} toggleTask={toggleTask} deleteTask={deleteTask}/>}
       {activeView==='outreach'&&<OutreachPage leads={outreachLeads} communications={communications} suppressions={suppressions} mailboxes={mailboxes} mailboxesLoading={mailboxesLoading} mailboxError={mailboxError} connectMailbox={connectMailbox} updateLead={updateOutreach} approveAndSend={approveAndSendOutreach} focusProjectId={outreachFocusProjectId}/>}
+      {activeView==='tenders'&&<TendersPage cloudEnabled={cloudEnabled} tenant={tenant}/>}
       {activeView==='research'&&<ResearchAgentPage cloudEnabled={cloudEnabled} session={session} projects={projects}/>}
       {activeView==='contractors'&&<Contractors stats={contractorStats} onSelect={name=>{updateDraftFilter('contractor',name);setFilters(x=>({...x,contractor:name}));goToView('projects')}}/>}
     </main>
