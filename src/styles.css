@@ -39,3 +39,5 @@ th:nth-child(n+5),td:nth-child(n+5){text-align:center}
   .projects-table th:nth-child(3){width:34%}
   .projects-table th:nth-child(5){width:23%}
 }
+.tenant-switcher{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:6px;padding:6px 8px;font:inherit;font-size:14px;max-width:180px}
+.tenant-switcher option{color:#111}

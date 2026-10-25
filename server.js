@@ -259,7 +259,9 @@ app.get('/api/projects/:id', requireSiteFinderAuth, async (req, res) => {
 
 app.post('/api/research/ingest', requireResearchIngestAuth, async (req, res) => {
   try {
-    const result = await applyResearchIngestMessage(researchAdminClient, req.body);
+    const result = await applyResearchIngestMessage(researchAdminClient, req.body, {
+      tenantId: process.env.RESEARCH_AGENT_INGEST_TENANT_ID || undefined,
+    });
     res.status(202).json(result);
   } catch (error) {
     const validationFailure = error?.name === 'ZodError';

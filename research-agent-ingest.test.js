@@ -141,6 +141,7 @@ test('records machine progress without impersonating a human actor', async () =>
   });
 
   assert.equal(savedRow.mode, 'read_only');
+  assert.equal('tenant_id' in savedRow, false);
   assert.equal(savedRow.created_by, null);
   assert.equal(savedRow.updated_by, null);
   assert.deepEqual(upsertOptions, {
@@ -258,4 +259,39 @@ test('all machine-authored detail rows have null human attribution', async () =>
   });
   assert.equal(candidate.created_by, null);
   assert.equal(candidate.updated_by, null);
+});
+
+test('worker-started runs take the tenant configured for the ingest credential', async () => {
+  const tenantId = '44444444-4444-4444-8444-444444444444';
+  let savedRow;
+  const client = {
+    from() {
+      return {
+        upsert(row) {
+          savedRow = row;
+          return Promise.resolve({error: null});
+        },
+      };
+    },
+  };
+  const message = {
+    type: 'run.upsert',
+    run: {
+      id: runId,
+      name: 'Worker run',
+      source: 'file',
+      status: 'running',
+      companyLimit: 1,
+      startedAt: '2026-07-28T09:00:00.000Z',
+    },
+  };
+
+  await applyResearchIngestMessage(client, message, {tenantId});
+  assert.equal(savedRow.tenant_id, tenantId);
+
+  await assert.rejects(applyResearchIngestMessage(client, message, {tenantId: 'not-a-tenant'}));
+  await assert.rejects(applyResearchIngestMessage(client, {
+    ...message,
+    run: {...message.run, tenantId},
+  }));
 });

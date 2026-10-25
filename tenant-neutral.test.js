@@ -29,7 +29,10 @@ test('tenant model files exist to check', async () => {
 test('tenant-scoped migrations and scripts hard-code no tenant brand or email domain', async () => {
   for (const file of await tenantNeutralFiles()) {
     const source = await readFile(new URL(`./${file}`, import.meta.url), 'utf8');
-    const code = source.replace(/^\s*--.*$/gm, '');
+    // Dropping a legacy policy has to name it.
+    const code = source
+      .replace(/^\s*--.*$/gm, '')
+      .replace(/^\s*drop policy "[^"]*" on [\w.]+;$/gim, '');
     for (const {pattern, label} of FORBIDDEN) {
       assert.doesNotMatch(code, pattern, `${file} contains a ${label}`);
     }

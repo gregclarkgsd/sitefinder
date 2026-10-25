@@ -171,8 +171,12 @@ function optionalFields(values) {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined));
 }
 
-export async function applyResearchIngestMessage(client, rawMessage) {
+// tenantId comes from server configuration (the tenant that owns the ingest
+// credential), never from the worker's message. Runs queued from Site Finder
+// already carry their tenant; this only applies to runs the worker starts.
+export async function applyResearchIngestMessage(client, rawMessage, {tenantId} = {}) {
   const message = parseResearchIngestMessage(rawMessage);
+  const ingestTenantId = tenantId ? uuid.parse(tenantId) : undefined;
   const now = new Date().toISOString();
   let operation;
 
@@ -180,6 +184,7 @@ export async function applyResearchIngestMessage(client, rawMessage) {
     const run = message.run;
     operation = client.from('research_runs').upsert({
       id: run.id,
+      ...optionalFields({tenant_id: ingestTenantId}),
       name: run.name,
       mode: 'read_only',
       source: run.source,

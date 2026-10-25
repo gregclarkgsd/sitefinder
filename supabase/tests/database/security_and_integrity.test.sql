@@ -6,8 +6,15 @@ select plan(44);
 
 -- Transaction-local fixtures let the suite prove policy behaviour, rather
 -- than only inspecting grants and policy text in the system catalog.
-insert into public.research_runs (id, name, company_limit)
-values ('10000000-0000-0000-0000-000000000001', 'pgTAP RLS fixture', 1);
+insert into auth.users (id, email)
+values ('20000000-0000-0000-0000-000000000002', 'member@tenant.test');
+insert into public.tenants (id, name, slug)
+values ('20000000-0000-0000-0000-0000000000aa', 'pgTAP Tenant', 'pgtap-tenant');
+insert into public.tenant_members (tenant_id, user_id, role)
+values ('20000000-0000-0000-0000-0000000000aa', '20000000-0000-0000-0000-000000000002', 'member');
+
+insert into public.research_runs (id, tenant_id, name, company_limit)
+values ('10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-0000000000aa', 'pgTAP RLS fixture', 1);
 
 insert into public.research_tasks (
   id, run_id, company_id, company_name, domain
@@ -63,9 +70,9 @@ values (
 );
 
 insert into public.attio_sync_links (
-  entity_type, source_key, source_name, attio_object_slug, sync_status
+  tenant_id, entity_type, source_key, source_name, attio_object_slug, sync_status
 )
-values ('company', 'pgtap:company', 'pgTAP Company', 'companies', 'pending');
+values ('20000000-0000-0000-0000-0000000000aa', 'company', 'pgtap:company', 'pgTAP Company', 'companies', 'pending');
 
 insert into public.ccs_project_schedule (
   project_id, site_start_date, site_end_date, is_active
@@ -73,7 +80,7 @@ insert into public.ccs_project_schedule (
 values ('pgtap-project', current_date, current_date + 30, true);
 
 -- Research Agent tables are private observability/review state. Their access
--- is deliberately read-only for authenticated GSD staff and unavailable to
+-- is deliberately read-only for tenant members and unavailable to
 -- anonymous clients; workers use server-side credentials instead.
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.research_runs'::regclass),
@@ -160,29 +167,29 @@ reset role;
 
 select set_config(
   'request.jwt.claims',
-  '{"sub":"20000000-0000-0000-0000-000000000002","email":"tester@gsdecorating.com"}',
+  '{"sub":"20000000-0000-0000-0000-000000000002","email":"member@tenant.test"}',
   true
 );
 set local role authenticated;
 select is(
   (select count(*) from public.research_runs where id = '10000000-0000-0000-0000-000000000001'),
   1::bigint,
-  'authenticated GSD users can see research runs'
+  'tenant members can see research runs'
 );
 select is(
   (select count(*) from public.research_tasks where id = '10000000-0000-0000-0000-000000000002'),
   1::bigint,
-  'authenticated GSD users can see research tasks'
+  'tenant members can see research tasks'
 );
 select is(
   (select count(*) from public.research_events where run_id = '10000000-0000-0000-0000-000000000001'),
   1::bigint,
-  'authenticated GSD users can see research events'
+  'tenant members can see research events'
 );
 select is(
   (select count(*) from public.research_candidates where id = '10000000-0000-0000-0000-000000000003'),
   1::bigint,
-  'authenticated GSD users can see research candidates'
+  'tenant members can see research candidates'
 );
 reset role;
 
@@ -243,6 +250,7 @@ select throws_ok(
   $$
     insert into public.research_candidates (
       id,
+      tenant_id,
       run_id,
       task_id,
       external_candidate_id,
@@ -261,6 +269,7 @@ select throws_ok(
     )
     values (
       '10000000-0000-0000-0000-000000000004',
+      '20000000-0000-0000-0000-0000000000aa',
       '10000000-0000-0000-0000-000000000001',
       '10000000-0000-0000-0000-000000000002',
       'pgtap-ineligible-approved',
@@ -286,6 +295,7 @@ select lives_ok(
   $$
     insert into public.research_candidates (
       id,
+      tenant_id,
       run_id,
       task_id,
       external_candidate_id,
@@ -304,6 +314,7 @@ select lives_ok(
     )
     values (
       '10000000-0000-0000-0000-000000000005',
+      '20000000-0000-0000-0000-0000000000aa',
       '10000000-0000-0000-0000-000000000001',
       '10000000-0000-0000-0000-000000000002',
       'pgtap-eligible-approved',
@@ -351,7 +362,7 @@ select ok(not has_table_privilege('anon', 'public.outreach_suppressions', 'selec
 select ok(not has_table_privilege('anon', 'public.outreach_mailbox_state', 'select'), 'anon cannot read mailbox credentials or state');
 select ok(not has_table_privilege('anon', 'public.outreach_oauth_states', 'select'), 'anon cannot read OAuth states');
 
--- Attio linkage is deliberately visible to GSD staff only as a read model.
+-- Attio linkage is deliberately visible to tenant members only as a read model.
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.attio_sync_links'::regclass),
   'Attio sync links have row level security enabled'
@@ -383,14 +394,14 @@ reset role;
 
 select set_config(
   'request.jwt.claims',
-  '{"sub":"20000000-0000-0000-0000-000000000002","email":"tester@gsdecorating.com"}',
+  '{"sub":"20000000-0000-0000-0000-000000000002","email":"member@tenant.test"}',
   true
 );
 set local role authenticated;
 select is(
   (select count(*) from public.attio_sync_links where source_key = 'pgtap:company'),
   1::bigint,
-  'authenticated GSD users can see Attio sync links'
+  'tenant members can see Attio sync links'
 );
 reset role;
 
