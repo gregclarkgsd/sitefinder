@@ -197,6 +197,15 @@ export function scoreNotice(notice, settings = {}, { now = Date.now() } = {}) {
   };
 }
 
+const TENANT_CRITERIA_SIGNALS = new Set(['cpv_primary', 'cpv_secondary', 'keyword_title', 'keyword_description', 'region_or_buyer_allow']);
+
+// True when the notice matched at least one of the tenant's own criteria, as
+// opposed to only the generic buyer-type and stage signals that most notices
+// earn. Only such notices become new leads.
+export function matchesTenantCriteria(breakdown) {
+  return Boolean(breakdown && !breakdown.blocked && breakdown.signals?.some((s) => TENANT_CRITERIA_SIGNALS.has(s.signal)));
+}
+
 // Builds tender_leads rows for one tenant. Notices scoring below the tenant's
 // min_score_to_show are still returned; the UI hides them behind a toggle.
 export function buildTenderLeads(notices, settings, { now = Date.now() } = {}) {

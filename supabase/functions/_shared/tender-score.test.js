@@ -8,6 +8,7 @@ import {
   cpvPrefix,
   DEFAULT_TENDER_WEIGHTS,
   isUrgent,
+  matchesTenantCriteria,
   resolveWeights,
   scoreNotice,
 } from './tender-score.js';
@@ -164,6 +165,14 @@ test('scores a real Find a Tender fixture end to end', () => {
     ['cpv_primary', 'keyword_title', 'region_or_buyer_allow', 'buyer_type', 'stage_tender']);
   assert.equal(result.score, 100);
   assert.equal(result.urgent, false);
+});
+
+test('only tenant criteria, not generic signals, make a notice a lead candidate', () => {
+  const council = notice({ buyer_name: 'Oldham Council', stage: 'tender', tender_status: 'active' });
+  assert.equal(matchesTenantCriteria(scoreNotice(council, {}, { now }).breakdown), false);
+  assert.equal(matchesTenantCriteria(scoreNotice(council, { regions: ['UKD'] }, { now }).breakdown), true);
+  assert.equal(matchesTenantCriteria(scoreNotice(council, { regions: ['UKD'], buyer_block: ['Oldham'] }, { now }).breakdown), false);
+  assert.equal(matchesTenantCriteria(undefined), false);
 });
 
 test('builds lead rows carrying the tenant and settings version', () => {
