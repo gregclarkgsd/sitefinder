@@ -46,3 +46,6 @@ verify_jwt = true
 
 [functions.connect-gmail-watch]
 verify_jwt = true
+
+[functions.rescore-tender-leads]
+verify_jwt = true

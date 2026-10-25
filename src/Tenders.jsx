@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
-import {AlertTriangle, Bookmark, CheckCircle2, ExternalLink, Info, Landmark, RefreshCw, Rocket, RotateCcw, Search, X, XCircle} from 'lucide-react';
+import {AlertTriangle, Bookmark, CheckCircle2, ExternalLink, Info, Landmark, RefreshCw, Rocket, RotateCcw, Search, Settings2, X, XCircle} from 'lucide-react';
 import './tenders.css';
 import {supabase} from './supabase';
 import {canEditTenantData} from './tenantContext';
@@ -15,10 +15,14 @@ import {
   OGL_NOTICE,
   regionOptions,
   scoreReasons,
+  settingsFormFromRow,
+  settingsRowFromForm,
+  signalLabel,
   sourceHealth,
   STAGE_LABELS,
   statusLabel,
   TENDER_SOURCE_LABELS,
+  WEIGHT_KEYS,
 } from './tendersState';
 
 const LEAD_PAGE = 1000;
@@ -172,6 +176,74 @@ function TenderDrawer({lead, settings, now, canEdit, busy, act, close}) {
   </aside>;
 }
 
+const LIST_INPUTS = [
+  ['keywords', 'Keywords', 'One per line, matched as whole words in the title or description'],
+  ['negative_keywords', 'Excluded keywords', 'Notices mentioning these lose points'],
+  ['cpv_primary', 'Primary CPV codes', 'e.g. 45000000; trailing zeros match the whole group'],
+  ['cpv_secondary', 'Secondary CPV codes', 'Count only when no primary code matches'],
+  ['regions', 'Regions', 'ITL codes (UKI, UKD3) or postcode areas and districts (M, SW1A)'],
+  ['buyer_allow', 'Preferred buyers', 'Buyer names or ids'],
+  ['buyer_block', 'Blocked buyers', 'Notices from these buyers always score 0'],
+];
+
+function TenderSettingsPanel({settings, tenantId, userId, onSaved, close}) {
+  const [form, setForm] = useState(() => settingsFormFromRow(settings));
+  const [errors, setErrors] = useState([]), [saving, setSaving] = useState(false), [status, setStatus] = useState('');
+  const set = (key, value) => setForm(current => ({...current, [key]: value}));
+  const setNested = (group, key, value) => setForm(current => ({...current, [group]: {...current[group], [key]: value}}));
+
+  const save = async event => {
+    event.preventDefault();
+    const {row, errors: problems} = settingsRowFromForm(form, {tenantId, userId});
+    setErrors(problems);
+    if (problems.length) return;
+    setSaving(true);
+    setStatus('Saving settings…');
+    const {tenant_id: _tenant, ...changes} = row;
+    const write = settings
+      ? await supabase.from('tender_tenant_settings').update(changes).eq('tenant_id', tenantId).select('tenant_id')
+      : await supabase.from('tender_tenant_settings').insert(row).select('tenant_id');
+    if (write.error || !write.data?.length) {
+      setSaving(false);
+      setStatus('');
+      setErrors([`Could not save settings: ${write.error?.message || 'only workspace admins can change them'}`]);
+      return;
+    }
+    setStatus('Saved. Re-scoring stored tenders…');
+    const {data: result, error: rescoreError} = await supabase.functions.invoke('rescore-tender-leads', {body: {tenant_id: tenantId}});
+    setSaving(false);
+    if (rescoreError) {
+      setStatus('');
+      setErrors([`Settings saved, but re-scoring failed: ${rescoreError.message}. Scores update on the next pull.`]);
+    } else {
+      setStatus(`Saved and re-scored ${result?.notices ?? 0} tenders (${result?.leads_written ?? 0} leads updated).`);
+    }
+    onSaved();
+  };
+
+  return <form className="tender-settings" onSubmit={save} aria-label="Tender settings">
+    <div className="tender-settings-head"><h2>Tender settings</h2><button type="button" className="icon" onClick={close} aria-label="Close tender settings"><X size={17}/></button></div>
+    <p className="muted">Only workspace admins can change these. Saving re-scores every stored tender for this workspace.</p>
+    <div className="tender-settings-grid">
+      {LIST_INPUTS.map(([key, label, hint]) => <label key={key}><span>{label}</span><textarea rows={3} value={form[key]} onChange={e => set(key, e.target.value)}/><small>{hint}</small></label>)}
+      <label><span>Value range (£)</span><span className="tender-range">
+        <input type="number" min="0" value={form.min_value} onChange={e => set('min_value', e.target.value)} aria-label="Minimum value" placeholder="Min"/>
+        <input type="number" min="0" value={form.max_value} onChange={e => set('max_value', e.target.value)} aria-label="Maximum value" placeholder="Max"/>
+      </span><small>Known values outside this range lose points</small></label>
+      <label><span>Minimum score to show</span><input type="number" min="0" max="100" value={form.min_score_to_show} onChange={e => set('min_score_to_show', e.target.value)}/><small>Lower scores sit behind a toggle</small></label>
+    </div>
+    <fieldset><legend>Weights</legend><div className="tender-weights">
+      {WEIGHT_KEYS.map(key => <label key={key}><span>{signalLabel(key)}</span><input type="number" min="-100" max="100" value={form.weights[key]} onChange={e => setNested('weights', key, e.target.value)}/></label>)}
+    </div></fieldset>
+    <fieldset><legend>Pipeline stage names</legend><div className="tender-weights tender-stage-names">
+      {Object.keys(form.stages).map(status => <label key={status}><span>{status.replace(/_/g, ' ')}</span><input value={form.stages[status]} maxLength={40} onChange={e => setNested('stages', status, e.target.value)}/></label>)}
+    </div></fieldset>
+    {errors.length > 0 && <ul className="tender-errors" role="alert">{errors.map(message => <li key={message}>{message}</li>)}</ul>}
+    {status && <p className="tender-save-status" role="status">{status}</p>}
+    <div className="tender-settings-actions"><button type="submit" className="primary" disabled={saving}>{saving ? 'Working…' : 'Save and re-score'}</button></div>
+  </form>;
+}
+
 export function TendersPage({cloudEnabled, tenant, session}) {
   const tenantId = tenant?.tenantId;
   const [data, setData] = useState({leads: [], settings: null, runs: []});
@@ -180,6 +252,8 @@ export function TendersPage({cloudEnabled, tenant, session}) {
   const [now, setNow] = useState(() => Date.now());
   const [selectedOcid, setSelectedOcid] = useState(null), [busyOcid, setBusyOcid] = useState(null);
   const canEdit = canEditTenantData(tenant);
+  const isAdmin = tenant?.role === 'admin';
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const load = useCallback(() => {
     if (!cloudEnabled || !tenantId) return;
@@ -190,7 +264,7 @@ export function TendersPage({cloudEnabled, tenant, session}) {
       .catch(err => setError(`Could not load tenders: ${err.message}`))
       .finally(() => setLoading(false));
   }, [cloudEnabled, tenantId]);
-  useEffect(() => { setSelectedOcid(null); load(); }, [load]);
+  useEffect(() => { setSelectedOcid(null); setSettingsOpen(false); load(); }, [load]);
 
   // Optimistic, like updateOutreach: show the change now, roll back if the
   // update is rejected (including RLS silently matching no row).
@@ -231,10 +305,12 @@ export function TendersPage({cloudEnabled, tenant, session}) {
   return <section className="tenders-page">
     <div className="tenders-head">
       <div><Landmark size={18}/><strong>{visible.length.toLocaleString()} tenders</strong><button className="icon" onClick={load} disabled={loading} aria-label="Refresh tenders"><RefreshCw size={16}/></button></div>
+      {isAdmin && <button type="button" className="tender-settings-toggle" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(open => !open)}><Settings2 size={15}/>Tender settings</button>}
     </div>
+    {settingsOpen && isAdmin && <TenderSettingsPanel key={tenantId} settings={data.settings} tenantId={tenantId} userId={session.user.id} onSaved={load} close={() => setSettingsOpen(false)}/>}
     <HealthBanner health={health}/>
     {error && <div className="notice" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss message"><X size={15}/></button></div>}
-    {!data.settings && !loading && <div className="notice">No tender settings for this workspace yet, so nothing is scored. A workspace admin can add keywords, CPV codes and regions.</div>}
+    {!data.settings && !loading && <div className="notice">No tender settings for this workspace yet, so nothing is scored. {isAdmin ? 'Open Tender settings to add keywords, CPV codes and regions.' : 'A workspace admin can add keywords, CPV codes and regions.'}</div>}
     <TenderFilters filters={filters} setFilter={setFilter} regions={regions} clear={() => setFilters(EMPTY_TENDER_FILTERS)}/>
     <div className="tender-table-wrap">
       <table className="tender-table">
