@@ -5,12 +5,14 @@
 //
 //   node scripts/tender-pull-dry-run.mjs [--days 1] [--from ISO --to ISO]
 //     [--sources fts,cf] [--max-pages 2] [--out /tmp/tender-dry-run.json]
+//     [--settings scripts/tender-settings.sample.json]
 //
 // TENDER_FTS_BASE_URL / TENDER_CF_BASE_URL override the feed hosts.
 
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { pullFeedWindow, TENDER_SOURCES } from '../supabase/functions/_shared/tender-ingest.js';
+import { scoreNotice } from '../supabase/functions/_shared/tender-score.js';
 
 const { values } = parseArgs({
   options: {
@@ -20,6 +22,7 @@ const { values } = parseArgs({
     sources: { type: 'string', default: 'fts,cf' },
     'max-pages': { type: 'string', default: '2' },
     out: { type: 'string' },
+    settings: { type: 'string', default: new URL('./tender-settings.sample.json', import.meta.url).pathname },
   },
 });
 
@@ -60,6 +63,23 @@ for (const source of sources) {
 const notices = results.flatMap((r) => r.notices);
 const uniqueOcids = new Set(notices.map((n) => n.ocid));
 console.log(`\nTotal: ${notices.length} releases, ${uniqueOcids.size} distinct notices after ocid dedupe`);
+
+const settings = JSON.parse(readFileSync(values.settings, 'utf8'));
+const newest = new Map();
+for (const notice of notices) {
+  const seen = newest.get(notice.ocid);
+  if (!seen || (notice.source_updated_at ?? '') > (seen.source_updated_at ?? '')) newest.set(notice.ocid, notice);
+}
+const scored = [...newest.values()]
+  .map((notice) => ({ notice, ...scoreNotice(notice, settings) }))
+  .sort((a, b) => b.score - a.score || String(a.notice.tender_deadline ?? '9').localeCompare(String(b.notice.tender_deadline ?? '9')));
+const shown = scored.filter((s) => s.score >= (settings.min_score_to_show ?? 0)).length;
+console.log(`\nTop 10 scores with ${values.settings} (${shown} at or above min_score_to_show ${settings.min_score_to_show ?? 0})`);
+for (const { notice, score, urgent, breakdown } of scored.slice(0, 10)) {
+  const why = breakdown.signals.map((s) => `${s.signal}${s.matched.length ? `[${s.matched.join(',')}]` : ''} ${s.weight > 0 ? '+' : ''}${s.weight}`).join(', ');
+  console.log(`  ${String(score).padStart(3)}${urgent ? ' URGENT' : ''}  ${notice.source}/${notice.stage}  ${(notice.title ?? '').slice(0, 70)}`);
+  console.log(`       ${notice.buyer_name ?? 'unknown buyer'} | ${why || 'no signals'}`);
+}
 
 if (values.out) {
   writeFileSync(values.out, `${JSON.stringify({ from, to, results }, null, 2)}\n`);
