@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { normaliseRelease } from './tender-ingest.js';
 import {
   londonHour,
   parsePullRequest,
+  parseRescoreRequest,
   planSourceWindow,
   RequestError,
+  rescoreTenantForAdmin,
   rescoreTenants,
   runTenderPull,
   secretMatches,
@@ -246,4 +249,22 @@ test('a backfill pulls the explicit window from the given cursor', async () => {
   assert.equal(url.searchParams.get('updatedFrom'), '2026-10-01T00:00:00');
   assert.equal(url.searchParams.get('cursor'), 'c5');
   assert.equal(db.state.runs[0].mode, 'backfill');
+});
+
+test('validates re-score requests', () => {
+  assert.deepEqual(parseRescoreRequest({tenant_id: ' 11111111-1111-1111-1111-111111111111 '}), {tenantId: '11111111-1111-1111-1111-111111111111'});
+  assert.throws(() => parseRescoreRequest({tenant_id: 'gsd'}), RequestError);
+  assert.throws(() => parseRescoreRequest(null), RequestError);
+});
+
+test('only admins can re-score, and only their own tenant', async () => {
+  const db = fakeDb({settings: [settingsA, settingsB]});
+  await db.ingest(ftsPage.releases.map((r) => normaliseRelease(r, 'fts')));
+  assert.equal((await rescoreTenantForAdmin({db, tenantId: 'tenant-a', isAdmin: false})).status, 403);
+  assert.equal(db.state.leads.size, 0);
+  const ok = await rescoreTenantForAdmin({db, tenantId: 'tenant-a', isAdmin: true});
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.body, {tenants: 1, notices: 3, leads_written: 2});
+  assert.ok([...db.state.leads.keys()].every((key) => key.startsWith('tenant-a|')));
+  assert.equal((await rescoreTenantForAdmin({db, tenantId: 'tenant-c', isAdmin: true})).status, 409);
 });

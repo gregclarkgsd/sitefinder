@@ -10,10 +10,14 @@ import {
   leadActionChanges,
   matchedTerms,
   OGL_NOTICE,
+  parseList,
   regionOptions,
   scoreReasons,
+  settingsFormFromRow,
+  settingsRowFromForm,
   sourceHealth,
   statusLabel,
+  TEMPLATE_WEIGHTS,
 } from './tendersState.js';
 
 const now = Date.parse('2026-10-25T12:00:00Z');
@@ -156,4 +160,53 @@ test('explains the score from the breakdown', () => {
   ]);
   assert.deepEqual(scoreReasons({blocked: true, blocked_by: ['Example'], signals: []}), [{label: 'Blocked buyer', weight: null, matched: ['Example']}]);
   assert.deepEqual(scoreReasons(null), []);
+});
+
+test('parses list fields from lines or commas', () => {
+  assert.deepEqual(parseList(' painting \nDecorating, painting,,  spray   finishes '), ['painting', 'Decorating', 'spray finishes']);
+  assert.deepEqual(parseList(''), []);
+});
+
+test('fills the settings form from a row, falling back to the template', () => {
+  const form = settingsFormFromRow(null);
+  assert.equal(form.keywords, '');
+  assert.equal(form.min_score_to_show, 40);
+  assert.deepEqual(form.weights, TEMPLATE_WEIGHTS);
+  assert.equal(form.stages.bid_no_bid, 'Bid / no-bid');
+  const filled = settingsFormFromRow({keywords: ['a', 'b'], weights: {keyword_title: 60}, stages: {won: 'Won it'}, min_value: 1000});
+  assert.equal(filled.keywords, 'a\nb');
+  assert.equal(filled.weights.keyword_title, 60);
+  assert.equal(filled.weights.cpv_primary, 40);
+  assert.equal(filled.stages.won, 'Won it');
+  assert.equal(filled.min_value, 1000);
+});
+
+test('turns a valid form into a settings row', () => {
+  const form = {...settingsFormFromRow(null), keywords: 'repairs, refurbishment', cpv_primary: '4544\n45000000-7', regions: 'uki\nsw1a\nM', min_value: '10000', max_value: ''};
+  const {row, errors} = settingsRowFromForm(form, {tenantId: 't1', userId: 'u1'});
+  assert.deepEqual(errors, []);
+  assert.equal(row.tenant_id, 't1');
+  assert.equal(row.updated_by, 'u1');
+  assert.deepEqual(row.keywords, ['repairs', 'refurbishment']);
+  assert.deepEqual(row.cpv_primary, ['45440000', '45000000']);
+  assert.deepEqual(row.regions, ['UKI', 'SW1A', 'M']);
+  assert.equal(row.min_value, 10000);
+  assert.equal(row.max_value, null);
+  assert.deepEqual(row.weights, TEMPLATE_WEIGHTS);
+});
+
+test('rejects invalid settings with readable messages', () => {
+  const form = {
+    ...settingsFormFromRow(null),
+    cpv_primary: 'painting', regions: 'Greater London', min_value: '500', max_value: '100', min_score_to_show: '150',
+    weights: {...TEMPLATE_WEIGHTS, keyword_title: 'lots'}, stages: {...settingsFormFromRow(null).stages, won: ''},
+  };
+  const {errors} = settingsRowFromForm(form, {tenantId: 't1', userId: 'u1'});
+  assert.equal(errors.length, 6);
+  assert.match(errors.join('\n'), /CPV codes must be 2 to 8 digits: painting/u);
+  assert.match(errors.join('\n'), /Regions must be ITL codes/u);
+  assert.match(errors.join('\n'), /Minimum value must not be above maximum value/u);
+  assert.match(errors.join('\n'), /Minimum score to show/u);
+  assert.match(errors.join('\n'), /Keyword in title weight/u);
+  assert.match(errors.join('\n'), /Stage label for won/u);
 });

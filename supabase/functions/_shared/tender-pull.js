@@ -171,6 +171,23 @@ export async function rescoreTenants({ db, ocids = null, tenantIds = null, now =
   return summary;
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function parseRescoreRequest(body) {
+  const tenantId = typeof body?.tenant_id === 'string' ? body.tenant_id.trim() : '';
+  if (!UUID.test(tenantId)) throw new RequestError('tenant_id must be a workspace id');
+  return {tenantId};
+}
+
+// Admin-triggered full re-score of one tenant after its settings change.
+// `isAdmin` must be checked with the caller's own JWT before calling.
+export async function rescoreTenantForAdmin({db, tenantId, isAdmin, now = Date.now()}) {
+  if (!isAdmin) return {status: 403, body: {error: 'Only workspace admins can re-score tenders'}};
+  const summary = await rescoreTenants({db, ocids: null, tenantIds: [tenantId], now});
+  if (!summary.tenants) return {status: 409, body: {error: 'Save tender settings before re-scoring', ...summary}};
+  return {status: 200, body: summary};
+}
+
 export async function runTenderPull({
   db,
   request,

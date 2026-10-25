@@ -1,3 +1,5 @@
+import {DEFAULT_TENDER_WEIGHTS, SIGNAL_ORDER} from '../supabase/functions/_shared/tender-score.js';
+
 export const TENDER_SOURCE_LABELS = Object.freeze({fts: 'Find a Tender', cf: 'Contracts Finder'});
 export const BROKEN_AFTER_MS = 26 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -207,6 +209,87 @@ const SIGNAL_LABELS = Object.freeze({
   negative_keyword: 'Excluded keyword',
   value_outside_band: 'Value outside your range',
 });
+
+export const WEIGHT_KEYS = SIGNAL_ORDER;
+export const TEMPLATE_WEIGHTS = DEFAULT_TENDER_WEIGHTS;
+const LIST_FIELDS = ['keywords', 'negative_keywords', 'cpv_primary', 'cpv_secondary', 'regions', 'buyer_allow', 'buyer_block'];
+
+export function signalLabel(key) {
+  return SIGNAL_LABELS[key] || key;
+}
+
+// One entry per line or comma; trimmed, de-duplicated case-insensitively.
+export function parseList(text) {
+  const seen = new Set();
+  const items = [];
+  for (const raw of String(text ?? '').split(/[\n,]/)) {
+    const item = raw.trim().replace(/\s+/g, ' ');
+    const key = item.toLowerCase();
+    if (item && !seen.has(key)) {
+      seen.add(key);
+      items.push(item);
+    }
+  }
+  return items;
+}
+
+export function settingsFormFromRow(row) {
+  const form = {};
+  for (const field of LIST_FIELDS) form[field] = (row?.[field] || []).join('\n');
+  form.min_value = row?.min_value ?? '';
+  form.max_value = row?.max_value ?? '';
+  form.min_score_to_show = row?.min_score_to_show ?? 40;
+  form.weights = Object.fromEntries(WEIGHT_KEYS.map(key => [key, row?.weights?.[key] ?? TEMPLATE_WEIGHTS[key]]));
+  form.stages = Object.fromEntries(LEAD_STATUSES.map(status => [status, row?.stages?.[status] ?? statusLabel(status, null)]));
+  return form;
+}
+
+// Validates the admin form and returns the tender_tenant_settings columns to
+// write, or the list of problems to show.
+export function settingsRowFromForm(form, {tenantId, userId}) {
+  const errors = [];
+  const row = {tenant_id: tenantId, updated_by: userId};
+  for (const field of LIST_FIELDS) row[field] = parseList(form[field]);
+
+  for (const field of ['cpv_primary', 'cpv_secondary']) {
+    const bad = row[field].filter(code => !/^\d{2,8}(-\d)?$/.test(code));
+    if (bad.length) errors.push(`CPV codes must be 2 to 8 digits: ${bad.join(', ')}`);
+    row[field] = row[field].map(code => code.replace(/-\d$/, '').padEnd(8, '0'));
+  }
+  row.regions = row.regions.map(region => region.toUpperCase());
+  const badRegions = row.regions.filter(region => !/^(UK[A-Z0-9]{0,4}|[A-Z]{1,2}\d[A-Z\d]?|[A-Z]{1,2})$/.test(region.replace(/\s+/g, '')));
+  if (badRegions.length) errors.push(`Regions must be ITL codes (e.g. UKI) or postcode areas or districts (e.g. M, SW1A): ${badRegions.join(', ')}`);
+
+  const money = (value, label) => {
+    if (value === '' || value === null || value === undefined) return null;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) { errors.push(`${label} must be a positive number`); return null; }
+    return n;
+  };
+  row.min_value = money(form.min_value, 'Minimum value');
+  row.max_value = money(form.max_value, 'Maximum value');
+  if (row.min_value !== null && row.max_value !== null && row.min_value > row.max_value) {
+    errors.push('Minimum value must not be above maximum value');
+  }
+
+  const minScore = Number(form.min_score_to_show);
+  if (!Number.isInteger(minScore) || minScore < 0 || minScore > 100) errors.push('Minimum score to show must be a whole number from 0 to 100');
+  row.min_score_to_show = minScore;
+
+  row.weights = {};
+  for (const key of WEIGHT_KEYS) {
+    const n = Number(form.weights?.[key]);
+    if (!Number.isFinite(n) || n < -100 || n > 100) errors.push(`${signalLabel(key)} weight must be between -100 and 100`);
+    row.weights[key] = n;
+  }
+  row.stages = {};
+  for (const status of LEAD_STATUSES) {
+    const label = String(form.stages?.[status] ?? '').trim();
+    if (!label || label.length > 40) errors.push(`Stage label for ${status} must be 1 to 40 characters`);
+    row.stages[status] = label;
+  }
+  return {row, errors};
+}
 
 // "Why this score" lines for the lead detail.
 export function scoreReasons(breakdown) {
