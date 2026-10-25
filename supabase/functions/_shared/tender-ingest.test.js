@@ -5,6 +5,7 @@ import {
   buildFeedUrl,
   classifyFeedResponse,
   extractNextCursor,
+  FEED_USER_AGENT,
   formatFeedTimestamp,
   normaliseRelease,
   normaliseReleases,
@@ -178,8 +179,10 @@ test('strips CPV check digits, sums lot values and drops releases without identi
 
 function fakeFeed(responses) {
   const calls = [];
-  const fetchImpl = async (url) => {
+  const fetchImpl = async (url, init) => {
     calls.push(url);
+    assert.equal(init.headers['user-agent'], FEED_USER_AGENT);
+    assert.doesNotMatch(FEED_USER_AGENT, /deno/iu);
     const next = responses.shift();
     if (next instanceof Error) throw next;
     return new Response(next.body, { status: next.status ?? 200, headers: next.headers });

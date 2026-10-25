@@ -26,6 +26,9 @@ export const MAX_PAGE_LIMIT = 100;
 export const MIN_REQUEST_INTERVAL_MS = 6000;
 export const MAX_RETRIES = 3;
 export const MAX_RETRY_AFTER_MS = 120000;
+// The feeds' firewall returns 403 to the default Deno user agent, so every
+// request names itself explicitly.
+export const FEED_USER_AGENT = 'SiteFinder-TenderPull/1.0 (public OCDS reader)';
 
 function sourceConfig(source) {
   const config = TENDER_SOURCES[source];
@@ -361,7 +364,7 @@ export async function pullFeedWindow({
       lastRequestAt = now();
       let outcome;
       try {
-        const response = await fetchImpl(url, { headers: { accept: 'application/json' } });
+        const response = await fetchImpl(url, { headers: { accept: 'application/json', 'user-agent': FEED_USER_AGENT } });
         const bodyText = await response.text();
         outcome = classifyFeedResponse({ status: response.status, headers: response.headers, bodyText, now: now() });
       } catch (error) {

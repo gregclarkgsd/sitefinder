@@ -15,6 +15,9 @@ enabled = false
 [functions.sync-ccs-projects]
 verify_jwt = false
 
+[functions.pull-tender-notices]
+verify_jwt = false
+
 [functions.sync-ccs-projects-to-attio]
 verify_jwt = false
 
