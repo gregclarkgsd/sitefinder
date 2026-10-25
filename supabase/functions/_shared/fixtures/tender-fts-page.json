@@ -1,0 +1,424 @@
+{
+  "uri": "https://www.find-tender.service.gov.uk/api/1.0/ocdsReleasePackages?updatedFrom=2026-10-20T00:00:00&updatedTo=2026-10-21T00:00:00&limit=3",
+  "version": "1.1",
+  "publishedDate": "2026-10-20T21:38:27+01:00",
+  "publisher": {
+    "name": "Cabinet Office",
+    "scheme": "GB-GOR",
+    "uid": "D2",
+    "uri": "https://www.gov.uk/government/organisations/cabinet-office"
+  },
+  "license": "http://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/",
+  "releases": [
+    {
+      "ocid": "ocds-h6vhtk-078c55",
+      "id": "099225-2026",
+      "tag": [
+        "award",
+        "contract"
+      ],
+      "date": "2026-10-20T21:38:27+01:00",
+      "initiationType": "tender",
+      "parties": [
+        {
+          "name": "Surrey County Council",
+          "id": "GB-PPON-PWRH-8974-TNBV",
+          "identifier": {
+            "scheme": "GB-PPON",
+            "id": "PWRH-8974-TNBV"
+          },
+          "address": {
+            "streetAddress": "Surrey County Council",
+            "locality": "Reigate",
+            "postalCode": "RH2 8EF",
+            "country": "GB",
+            "countryName": "United Kingdom",
+            "region": "UKJ26"
+          },
+          "roles": [
+            "buyer"
+          ],
+          "details": {
+            "url": "http://www.surreycc.gov.uk",
+            "classifications": [
+              {
+                "scheme": "UK_CA_TYPE",
+                "id": "publicAuthoritySubCentralGovernment",
+                "description": "Public authority - sub-central government"
+              }
+            ]
+          }
+        },
+        {
+          "name": "ANGEL CARS (WOKING) LTD",
+          "id": "GB-FTS-9007",
+          "address": {
+            "streetAddress": "15 Walton Terrace",
+            "locality": "Woking",
+            "postalCode": "GU215EL",
+            "country": "GB",
+            "countryName": "United Kingdom",
+            "region": "UKJ25"
+          },
+          "roles": [
+            "supplier"
+          ],
+          "details": {
+            "scale": "large",
+            "vcse": false
+          }
+        }
+      ],
+      "buyer": {
+        "id": "GB-PPON-PWRH-8974-TNBV",
+        "name": "Surrey County Council"
+      },
+      "tender": {
+        "id": "SA1403838",
+        "legalBasis": {
+          "id": "2023/54",
+          "scheme": "UKPGA",
+          "uri": "https://www.legislation.gov.uk/ukpga/2023/54/contents"
+        },
+        "title": "Client Transport Services 2026 - 2034 - SEND",
+        "description": "Client Transport Services 2026 - 2034 - Lot 2 Enhanced Needs Transport - Taxi/MPV (1-8 passenger seats) with PA - SEND",
+        "status": "complete",
+        "procurementMethod": "limited",
+        "procurementMethodDetails": "Below threshold - limited competition",
+        "specialRegime": [
+          "lightTouch"
+        ],
+        "lots": [
+          {
+            "id": "2717",
+            "status": "complete"
+          }
+        ]
+      },
+      "awards": [
+        {
+          "id": "1",
+          "status": "active",
+          "mainProcurementCategory": "services",
+          "suppliers": [
+            {
+              "id": "GB-FTS-9007",
+              "name": "ANGEL CARS (WOKING) LTD"
+            }
+          ],
+          "items": [
+            {
+              "id": "2717",
+              "additionalClassifications": [
+                {
+                  "scheme": "CPV",
+                  "id": "60000000",
+                  "description": "Transport services (excl. Waste transport)"
+                }
+              ],
+              "relatedLot": "2717"
+            }
+          ],
+          "relatedLots": [
+            "2717"
+          ]
+        }
+      ],
+      "contracts": [
+        {
+          "id": "1",
+          "awardID": "1",
+          "title": "Client Transport Services 2026 - 2034 - SEND",
+          "status": "active",
+          "period": {
+            "startDate": "2026-11-02T00:00:00Z",
+            "endDate": "2028-07-31T23:59:59Z"
+          },
+          "value": {
+            "amountGross": 113750,
+            "amount": 113750,
+            "currency": "GBP"
+          },
+          "aboveThreshold": false,
+          "dateSigned": "2026-10-20T00:00:00Z",
+          "documents": [
+            {
+              "id": "099225-2026",
+              "documentType": "contractNotice",
+              "noticeType": "UK7",
+              "description": "Contract details notice on Find a Tender",
+              "url": "https://www.find-tender.service.gov.uk/Notice/099225-2026",
+              "datePublished": "2026-10-20T21:38:27+01:00",
+              "format": "text/html"
+            }
+          ]
+        }
+      ],
+      "language": "en"
+    },
+    {
+      "ocid": "ocds-h6vhtk-078c54",
+      "id": "099224-2026",
+      "tag": [
+        "planning"
+      ],
+      "date": "2026-10-20T19:55:25+01:00",
+      "initiationType": "tender",
+      "parties": [
+        {
+          "name": "YORKSHIRE WATER SERVICES LIMITED",
+          "id": "GB-COH-02366682",
+          "identifier": {
+            "scheme": "GB-COH",
+            "id": "02366682"
+          },
+          "additionalIdentifiers": [
+            {
+              "scheme": "GB-PPON",
+              "id": "PXGT-3622-WXBQ"
+            }
+          ],
+          "address": {
+            "streetAddress": "Ellington House",
+            "locality": "Leeds",
+            "postalCode": "LS10 1AB",
+            "country": "GB",
+            "countryName": "United Kingdom",
+            "region": "UKE42"
+          },
+          "roles": [
+            "buyer"
+          ],
+          "details": {
+            "classifications": [
+              {
+                "scheme": "UK_CA_TYPE",
+                "id": "privateUtility",
+                "description": "Private utility"
+              }
+            ]
+          }
+        }
+      ],
+      "buyer": {
+        "id": "GB-COH-02366682",
+        "name": "YORKSHIRE WATER SERVICES LIMITED"
+      },
+      "planning": {
+        "milestones": [
+          {
+            "id": "engagement",
+            "type": "engagement",
+            "description": "Yorkshire Water invites prospective suppliers to express interest in preliminary market engagement for the CM3640 Networks Emergency & Resilience Framework.\nEngagement will explore supplier capability and interest across the four proposed lots, geographical coverage, additional resource availability, delivery and subcontracting models, mobilisation, emergency response times and commercial arrangements. We also welcome feedback on barriers to participation and alternative delivery solutions, including separating activities within end-to-end delivery to enable specialist suppliers to participate. Feedback will inform the detailed scope and procurement approach.\nInterested suppliers should email the buyer to express their interest. Suppliers will then be sent a questionnaire to complete and return. Please indicate which lots or activities are of interest in your email.\nParticipation is voluntary and does not guarantee appointment under any future procurement. Suppliers do not need to participate in this engagement to respond to a subsequent tender.",
+            "dueDate": "2026-11-09T23:59:59Z",
+            "status": "scheduled"
+          }
+        ],
+        "documents": [
+          {
+            "id": "099224-2026",
+            "documentType": "marketEngagementNotice",
+            "noticeType": "UK2",
+            "description": "Preliminary market engagement notice on Find a Tender",
+            "url": "https://www.find-tender.service.gov.uk/Notice/099224-2026",
+            "datePublished": "2026-10-20T19:55:25+01:00",
+            "format": "text/html"
+          }
+        ]
+      },
+      "tender": {
+        "id": "CM3640",
+        "legalBasis": {
+          "id": "2023/54",
+          "scheme": "UKPGA",
+          "uri": "https://www.legislation.gov.uk/ukpga/2023/54/contents"
+        },
+        "title": "Networks Emergency & Resilience Framework",
+        "description": "Yorkshire Water Services Limited is undertaking preliminary market engagement ahead of a proposed procurement for the CM3640 Networks Emergency & Resilience Framework.\nWe are seeking to broaden our supply chain and work collaboratively with suppliers to strengthen wastewater delivery capacity. We would like to understand what would enable suppliers to work with us, provide reliable resources and build additional capacity.\nWe particularly welcome interest from organisations not currently working directly with Yorkshire Water, including specialist contractors and SMEs. Suppliers may express interest in individual activities or end-to-end delivery. We are open to exploring alternative delivery solutions, including separating activities within end-to-end delivery to enable more specialist suppliers to partner with us.\nThe proposed framework will supplement existing contractual arrangements, supporting proactive and reactive work, including emergency response, through four proposed activity-based lots. The descriptions below are indicative and non-exhaustive. They outline the activities currently envisaged for each lot and do not represent a finalised scope:\nLot 1 — Civils support: Excavation, sewer repairs and lining, ironworks, manhole refurbishment, backfilling and reinstatement.\nLot 2 — Non-civils support: Sewer jetting and cleansing, recycler services, CCTV surveys and associated operational labour.\nLot 3 — Process and pumping: Rising main repairs and pumping support, repairs after rising main, temporary overpumping, testing, mechanical, electrical, instrumentation, control and automation (MEICA) support, and reporting.\nLot 4 — Mitigation and tankering: Wastewater tankering and temporary mitigation measures supporting incident response and operational continuity.\nThe scope, activities and interfaces between lots will be refined through market engagement and development of the procurement. Activities may be added, amended or allocated differently between lots.\nThrough this engagement, we wish to explore:\nSupplier capability, geographical coverage and additional resource availability alongside existing commitments.\nMobilisation times, emergency response capability and opportunities to develop capacity.\nDirect delivery, subcontracting and partnership models.\nCommercial arrangements, planned work packages and advance notice that could improve resource availability and pricing.\nBarriers to participation, including whether requirements for end-to-end delivery could limit specialist supplier involvement, and how alternative delivery arrangements could enable suppliers to participate and commit resources.\nInterested suppliers are invited to help shape the scope and develop a practical delivery approach. Feedback will inform the detailed requirements and procurement approach.\nThis notice is for preliminary market engagement. Participation does not guarantee an invitation or appointment under any future procurement, and non-participation will not prevent suppliers from responding to a subsequent tender. Yorkshire Water has not committed to proceeding with the procurement. The final scope, estimated value, duration and procurement approach remain subject to confirmation.",
+        "items": [
+          {
+            "id": "1",
+            "additionalClassifications": [
+              {
+                "scheme": "CPV",
+                "id": "45232410",
+                "description": "Sewerage work"
+              },
+              {
+                "scheme": "CPV",
+                "id": "45232440",
+                "description": "Construction work for sewage pipes"
+              },
+              {
+                "scheme": "CPV",
+                "id": "50511000",
+                "description": "Repair and maintenance services of pumps"
+              },
+              {
+                "scheme": "CPV",
+                "id": "90400000",
+                "description": "Sewage services"
+              }
+            ],
+            "deliveryAddresses": [
+              {
+                "region": "UKE",
+                "country": "GB",
+                "countryName": "United Kingdom"
+              }
+            ],
+            "relatedLot": "1"
+          }
+        ],
+        "mainProcurementCategory": "services",
+        "specialRegime": [
+          "utilities"
+        ],
+        "aboveThreshold": true,
+        "techniques": {
+          "hasFrameworkAgreement": true
+        },
+        "lots": [
+          {
+            "id": "1",
+            "suitability": {
+              "sme": true
+            },
+            "contractPeriod": {
+              "startDate": "2027-08-02T00:00:00Z",
+              "endDate": "2030-08-02T23:59:59Z"
+            },
+            "status": "planning"
+          }
+        ],
+        "status": "planning"
+      },
+      "language": "en"
+    },
+    {
+      "ocid": "ocds-h6vhtk-078c53",
+      "id": "099223-2026",
+      "tag": [
+        "tender"
+      ],
+      "date": "2026-10-20T18:19:49+01:00",
+      "initiationType": "tender",
+      "parties": [
+        {
+          "name": "Oldham Metropolitan Borough Council",
+          "id": "GB-PPON-PMRJ-8362-DVNT",
+          "identifier": {
+            "scheme": "GB-PPON",
+            "id": "PMRJ-8362-DVNT"
+          },
+          "address": {
+            "streetAddress": "Spindles Shopping Centre, West Street",
+            "locality": "Oldham",
+            "postalCode": "OL1 1HD",
+            "country": "GB",
+            "countryName": "United Kingdom",
+            "region": "UKD37"
+          },
+          "roles": [
+            "buyer"
+          ],
+          "details": {
+            "classifications": [
+              {
+                "scheme": "UK_CA_TYPE",
+                "id": "publicAuthoritySubCentralGovernment",
+                "description": "Public authority - sub-central government"
+              }
+            ]
+          }
+        }
+      ],
+      "buyer": {
+        "id": "GB-PPON-PMRJ-8362-DVNT",
+        "name": "Oldham Metropolitan Borough Council"
+      },
+      "tender": {
+        "id": "DN829436",
+        "legalBasis": {
+          "id": "2023/54",
+          "scheme": "UKPGA",
+          "uri": "https://www.legislation.gov.uk/ukpga/2023/54/contents"
+        },
+        "title": "General Groundworks and Landscaping Works",
+        "description": "Oldham Council wish to appoint a Contractor for general groundworks and landscaping works.\nThe Contractor shall undertake:\n•\tReactive repair Works\n•\tEmergency response services\n•\tMinor replacement Works\nThe Works to be undertaken by the Contractor will be in relation to Council buildings, Schools, park lands, assets and sites within the Metropolitan Borough and Parishes of Oldham where the Council has an interest",
+        "status": "active",
+        "items": [
+          {
+            "id": "1",
+            "additionalClassifications": [
+              {
+                "scheme": "CPV",
+                "id": "45000000",
+                "description": "Construction work"
+              }
+            ],
+            "deliveryAddresses": [
+              {
+                "region": "UKD37",
+                "country": "GB",
+                "countryName": "United Kingdom"
+              }
+            ],
+            "relatedLot": "1"
+          }
+        ],
+        "value": {
+          "amountGross": 288000,
+          "amount": 240000,
+          "currency": "GBP"
+        },
+        "procurementMethod": "open",
+        "procurementMethodDetails": "Below threshold - open competition",
+        "mainProcurementCategory": "works",
+        "aboveThreshold": false,
+        "submissionTerms": {
+          "electronicSubmissionPolicy": "allowed"
+        },
+        "tenderPeriod": {
+          "endDate": "2026-12-02T12:00:00Z"
+        },
+        "enquiryPeriod": {
+          "endDate": "2026-11-25T12:00:00Z"
+        },
+        "otherRequirements": {
+          "reservedParticipationLocation": {
+            "gazetteer": {
+              "scheme": "GB-ONS",
+              "identifiers": [
+                "K02000001"
+              ]
+            },
+            "description": null
+          }
+        },
+        "lots": [
+          {
+            "id": "1",
+            "status": "active",
+            "value": {
+              "amountGross": 288000,
+              "amount": 240000,
+              "currency": "GBP"
+            },
+            "suitability": {
+              "sme": true
+            },
+            "contractPeriod": {
+              "startDate": "2027-04-01T00:00:00+01:00",
+              "endDate": "2031-03-31T23:59:59+01:00"
+            }
+          }
+        ]
+      },
+      "language": "en"
+    }
+  ],
+  "links": {
+    "next": "https://www.find-tender.service.gov.uk/api/1.0/ocdsReleasePackages?updatedFrom=2026-10-20T00:00:00&updatedTo=2026-10-21T00:00:00&limit=3&cursor=dXBkYXRlZEZyb209MjAyNi0xMC0yMFQwMDowMDowMHx1cGRhdGVkVG89MjAyNi0xMC0yMVQwMDowMDowMHxuZXh0Q3Vyc29yPTc1MTYxNg=="
+  }
+}
