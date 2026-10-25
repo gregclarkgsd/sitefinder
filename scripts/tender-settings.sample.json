@@ -1,0 +1,14 @@
+{
+  "_comment": "Illustrative settings for the dry run only. Real settings are per tenant in tender_tenant_settings.",
+  "keywords": ["maintenance", "refurbishment", "repairs"],
+  "negative_keywords": ["software", "consultancy"],
+  "cpv_primary": ["45000000"],
+  "cpv_secondary": ["50000000"],
+  "regions": [],
+  "buyer_allow": [],
+  "buyer_block": [],
+  "min_value": null,
+  "max_value": null,
+  "weights": {},
+  "min_score_to_show": 40
+}
