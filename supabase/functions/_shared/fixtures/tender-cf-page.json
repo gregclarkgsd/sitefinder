@@ -1,0 +1,285 @@
+{
+  "uri": "https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search?publishedFrom=2026-10-20T00:00:00&publishedTo=2026-10-21T00:00:00&limit=3",
+  "version": "1.1",
+  "publishedDate": "2026-10-20T23:10:11+01:00",
+  "publisher": {
+    "name": "Cabinet Office",
+    "scheme": "GB-GOR",
+    "uid": "D2",
+    "uri": "https://www.gov.uk/government/organisations/cabinet-office"
+  },
+  "license": "http://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/",
+  "releases": [
+    {
+      "ocid": "ocds-b5fd17-b44aa063-f444-4586-a47d-6c02e847b67c",
+      "id": "ad8d669c-5eb1-49cf-845c-fc8805aa4ce5-918499",
+      "language": "en",
+      "date": "2026-10-20T23:10:11+01:00",
+      "tag": [
+        "award"
+      ],
+      "initiationType": "tender",
+      "tender": {
+        "id": "IT-597-1870-TWC001870 - AWARD",
+        "title": "022.26 Youth Support Worker Level 3 - AWARD",
+        "description": "To find a training provider to deliver Youth Support Worker level 3 to a newly recruited care experienced learner to start in post in November 2026. Please note additional learning requirements outlined in the attached mini competition document.",
+        "status": "complete",
+        "classification": {
+          "scheme": "CPV",
+          "id": "80000000",
+          "description": "Education and training services"
+        },
+        "items": [
+          {
+            "id": "1",
+            "deliveryAddresses": [
+              {
+                "postalCode": "TF3 4JA"
+              },
+              {
+                "countryName": "British Oversea Territories"
+              },
+              {
+                "countryName": "Channel Islands"
+              },
+              {
+                "countryName": "Europe"
+              },
+              {
+                "countryName": "Isle of Man"
+              },
+              {
+                "countryName": "Rest of the World"
+              },
+              {
+                "countryName": "United Kingdom"
+              }
+            ]
+          }
+        ],
+        "procurementMethod": "selective",
+        "procurementMethodDetails": "Restricted procedure",
+        "tenderPeriod": {
+          "endDate": "2026-10-09T17:00:00+01:00"
+        },
+        "contractPeriod": {
+          "startDate": "2026-10-20T01:00:00+01:00",
+          "endDate": "2028-10-31T23:59:59Z"
+        },
+        "suitability": {
+          "sme": false,
+          "vcse": false
+        },
+        "mainProcurementCategory": "services"
+      },
+      "parties": [
+        {
+          "id": "GB-CFS-273704",
+          "name": "Telford and Wrekin Council",
+          "identifier": {
+            "legalName": "Telford and Wrekin Council"
+          },
+          "address": {
+            "streetAddress": "Lawn Central, Telford",
+            "locality": "Shropshire",
+            "postalCode": "TF3 4JA",
+            "countryName": "United Kingdom"
+          },
+          "details": {
+            "url": "http://telford.gov.uk"
+          },
+          "roles": [
+            "buyer"
+          ]
+        },
+        {
+          "id": "GB-CFS-290039",
+          "name": "B-Skill Limited",
+          "identifier": {
+            "legalName": "B-Skill Limited"
+          },
+          "address": {
+            "streetAddress": "YBN, Delta Bank Road, Gateshead, Tyne & Wear, United Kingdom, NE11 9DJ"
+          },
+          "roles": [
+            "supplier"
+          ]
+        }
+      ],
+      "buyer": {
+        "id": "GB-CFS-273704",
+        "name": "Telford and Wrekin Council"
+      },
+      "awards": [
+        {
+          "id": "ocds-b5fd17-b44aa063-f444-4586-a47d-6c02e847b67c-1",
+          "status": "active",
+          "date": "2026-10-20T00:00:00+01:00",
+          "datePublished": "2026-10-20T23:10:11+01:00",
+          "value": {
+            "amount": 0,
+            "currency": "GBP"
+          },
+          "suppliers": [
+            {
+              "id": "GB-CFS-290039",
+              "name": "B-Skill Limited"
+            }
+          ],
+          "contractPeriod": {
+            "startDate": "2026-10-20T00:00:00+01:00",
+            "endDate": "2028-10-31T23:59:59Z"
+          },
+          "documents": [
+            {
+              "id": "1",
+              "documentType": "awardNotice",
+              "description": "Awarded contract notice on Contracts Finder",
+              "url": "https://www.contractsfinder.service.gov.uk/Notice/ad8d669c-5eb1-49cf-845c-fc8805aa4ce5",
+              "datePublished": "2026-10-20T23:10:11+01:00",
+              "format": "text/html",
+              "language": "en"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ocid": "ocds-b5fd17-2cd5142d-1a2f-4904-a321-9ed91012dfde",
+      "id": "277391c9-03e3-4209-bfb9-2c7227c84beb-918498",
+      "language": "en",
+      "date": "2026-10-20T23:07:53+01:00",
+      "tag": [
+        "award"
+      ],
+      "initiationType": "tender",
+      "tender": {
+        "id": "IT-597-1869-TWC001869 - AWARD",
+        "title": "023.26 Customer Service Specialist Level 3 - AWARD",
+        "description": "To find a training provider to deliver Customer Service Specialist level 3 to a newly recruited care experienced learner to start in post in November 2026. Please note additional learning requirements outlined in the attached mini competition document.",
+        "status": "complete",
+        "classification": {
+          "scheme": "CPV",
+          "id": "80000000",
+          "description": "Education and training services"
+        },
+        "items": [
+          {
+            "id": "1",
+            "deliveryAddresses": [
+              {
+                "postalCode": "TF3 4JA"
+              },
+              {
+                "countryName": "British Oversea Territories"
+              },
+              {
+                "countryName": "Channel Islands"
+              },
+              {
+                "countryName": "Europe"
+              },
+              {
+                "countryName": "Isle of Man"
+              },
+              {
+                "countryName": "Rest of the World"
+              },
+              {
+                "countryName": "United Kingdom"
+              }
+            ]
+          }
+        ],
+        "procurementMethod": "selective",
+        "procurementMethodDetails": "Restricted procedure",
+        "tenderPeriod": {
+          "endDate": "2026-10-09T17:00:00+01:00"
+        },
+        "contractPeriod": {
+          "startDate": "2026-10-21T01:00:00+01:00",
+          "endDate": "2028-10-31T23:59:59Z"
+        },
+        "suitability": {
+          "sme": false,
+          "vcse": false
+        },
+        "mainProcurementCategory": "services"
+      },
+      "parties": [
+        {
+          "id": "GB-CFS-273704",
+          "name": "Telford and Wrekin Council",
+          "identifier": {
+            "legalName": "Telford and Wrekin Council"
+          },
+          "address": {
+            "streetAddress": "Lawn Central, Telford",
+            "locality": "Shropshire",
+            "postalCode": "TF3 4JA",
+            "countryName": "United Kingdom"
+          },
+          "details": {
+            "url": "http://telford.gov.uk"
+          },
+          "roles": [
+            "buyer"
+          ]
+        },
+        {
+          "id": "GB-CFS-339343",
+          "name": "Herefordshire Ludlow and North Shropshire College",
+          "identifier": {
+            "legalName": "Herefordshire Ludlow and North Shropshire College"
+          },
+          "address": {
+            "streetAddress": "Herefordshire Ludlow and North Shropshire College, Folly Lane, Hereford, Herefordshire, United Kingdom, HR1 1LS"
+          },
+          "roles": [
+            "supplier"
+          ]
+        }
+      ],
+      "buyer": {
+        "id": "GB-CFS-273704",
+        "name": "Telford and Wrekin Council"
+      },
+      "awards": [
+        {
+          "id": "ocds-b5fd17-2cd5142d-1a2f-4904-a321-9ed91012dfde-1",
+          "status": "active",
+          "date": "2026-10-20T00:00:00+01:00",
+          "datePublished": "2026-10-20T23:07:52+01:00",
+          "value": {
+            "amount": 0,
+            "currency": "GBP"
+          },
+          "suppliers": [
+            {
+              "id": "GB-CFS-339343",
+              "name": "Herefordshire Ludlow and North Shropshire College"
+            }
+          ],
+          "contractPeriod": {
+            "startDate": "2026-10-21T00:00:00+01:00",
+            "endDate": "2028-10-31T23:59:59Z"
+          },
+          "documents": [
+            {
+              "id": "1",
+              "documentType": "awardNotice",
+              "description": "Awarded contract notice on Contracts Finder",
+              "url": "https://www.contractsfinder.service.gov.uk/Notice/277391c9-03e3-4209-bfb9-2c7227c84beb",
+              "datePublished": "2026-10-20T23:07:52+01:00",
+              "format": "text/html",
+              "language": "en"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "links": {
+    "next": "https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search?publishedFrom=2026-10-20T00:00:00&publishedTo=2026-10-21T00:00:00&limit=3&cursor=cHVibGlzaGVkRnJvbT0yMDI2LTEwLTIwVDAwOjAwOjAwfHB1Ymxpc2hlZFRvPTIwMjYtMTAtMjFUMDA6MDA6MDB8bGltaXQ9M3xuZXh0Q3Vyc29yPTc4NzI4MQ=="
+  }
+}
