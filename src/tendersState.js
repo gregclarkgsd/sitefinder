@@ -163,3 +163,60 @@ export function formatDeadline(value, now = Date.now()) {
 }
 
 export const STAGE_LABELS = Object.freeze({planning: 'Planning', tender: 'Tender', award: 'Award', contract: 'Contract'});
+
+export const LEAD_STATUSES = Object.freeze(['to_qualify', 'qualifying', 'bid_no_bid', 'bidding', 'submitted', 'won', 'lost', 'dismissed']);
+const DEFAULT_STATUS_LABELS = Object.freeze({
+  to_qualify: 'To qualify', qualifying: 'Qualifying', bid_no_bid: 'Bid / no-bid', bidding: 'Bidding',
+  submitted: 'Submitted', won: 'Won', lost: 'Lost', dismissed: 'Dismissed',
+});
+
+// Tenants can rename pipeline stages in tender_tenant_settings.stages.
+export function statusLabel(status, settings) {
+  const custom = settings?.stages?.[status];
+  return (typeof custom === 'string' && custom.trim()) || DEFAULT_STATUS_LABELS[status] || status;
+}
+
+// Column changes for each lead action. Save moves a new lead into the
+// pipeline, Pursue marks it as being bid, Dismiss keeps an optional reason.
+export function leadActionChanges(action, {reason = '', status} = {}) {
+  switch (action) {
+    case 'save': return {status: 'qualifying', dismiss_reason: null};
+    case 'pursue': return {status: 'bidding', dismiss_reason: null};
+    case 'dismiss': return {status: 'dismissed', dismiss_reason: String(reason).trim().slice(0, 500) || null};
+    case 'restore': return {status: 'to_qualify', dismiss_reason: null};
+    case 'status':
+      if (!LEAD_STATUSES.includes(status)) throw new Error(`Unknown lead status: ${status}`);
+      return {status, dismiss_reason: null};
+    default: throw new Error(`Unknown lead action: ${action}`);
+  }
+}
+
+export function applyLeadChanges(leads, ocid, changes) {
+  return (leads || []).map(lead => (lead.ocid === ocid ? {...lead, ...changes} : lead));
+}
+
+const SIGNAL_LABELS = Object.freeze({
+  cpv_primary: 'Primary CPV code',
+  cpv_secondary: 'Secondary CPV code',
+  keyword_title: 'Keyword in title',
+  keyword_description: 'Keyword in description',
+  region_or_buyer_allow: 'Region or preferred buyer',
+  buyer_type: 'Council or social housing buyer',
+  stage_tender: 'Open tender',
+  stage_planning: 'Planning or market engagement',
+  negative_keyword: 'Excluded keyword',
+  value_outside_band: 'Value outside your range',
+});
+
+// "Why this score" lines for the lead detail.
+export function scoreReasons(breakdown) {
+  if (!breakdown) return [];
+  if (breakdown.blocked) {
+    return [{label: 'Blocked buyer', weight: null, matched: breakdown.blocked_by || []}];
+  }
+  return (breakdown.signals || []).map(signal => ({
+    label: SIGNAL_LABELS[signal.signal] || signal.signal,
+    weight: signal.weight,
+    matched: signal.matched || [],
+  }));
+}

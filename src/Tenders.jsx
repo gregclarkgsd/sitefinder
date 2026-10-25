@@ -1,17 +1,23 @@
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
-import {AlertTriangle, CheckCircle2, ExternalLink, Info, Landmark, RefreshCw, Search} from 'lucide-react';
+import {AlertTriangle, Bookmark, CheckCircle2, ExternalLink, Info, Landmark, RefreshCw, Rocket, RotateCcw, Search, X, XCircle} from 'lucide-react';
 import './tenders.css';
 import {supabase} from './supabase';
+import {canEditTenantData} from './tenantContext';
 import {
+  applyLeadChanges,
   EMPTY_TENDER_FILTERS,
   filterLeads,
   formatDeadline,
   formatTenderValue,
+  LEAD_STATUSES,
+  leadActionChanges,
   matchedTerms,
   OGL_NOTICE,
   regionOptions,
+  scoreReasons,
   sourceHealth,
   STAGE_LABELS,
+  statusLabel,
   TENDER_SOURCE_LABELS,
 } from './tendersState';
 
@@ -101,12 +107,79 @@ function LeadRow({lead, now, onOpen}) {
   </tr>;
 }
 
-export function TendersPage({cloudEnabled, tenant}) {
+const fmtDay = value => (value ? new Intl.DateTimeFormat('en-GB', {day: 'numeric', month: 'short', year: 'numeric'}).format(new Date(value)) : 'Not published');
+
+function Field({label, children}) {
+  return <div className="tender-field"><span>{label}</span><div>{children}</div></div>;
+}
+
+function TenderDrawer({lead, settings, now, canEdit, busy, act, close}) {
+  const notice = lead.notice || {};
+  const reasons = scoreReasons(lead.score_breakdown);
+  const isAward = notice.stage === 'award' || notice.stage === 'contract';
+  const dismiss = () => {
+    const reason = window.prompt('Why dismiss this tender? (optional)', lead.dismiss_reason || '');
+    if (reason !== null) act(lead, 'dismiss', {reason});
+  };
+  return <aside className="tender-drawer" aria-label="Tender detail">
+    <div className="tender-drawer-head">
+      <div><span className="tender-chip">{STAGE_LABELS[notice.stage] || 'Notice'}</span>{lead.urgent && <span className="tender-chip urgent">Closing soon</span>}</div>
+      <button className="icon" onClick={close} aria-label="Close tender detail"><X size={17}/></button>
+    </div>
+    <h2>{notice.title || 'Untitled notice'}</h2>
+    <p className="tender-buyer">{notice.buyer_name || 'Unknown buyer'}</p>
+    {notice.notice_url && <a className="tender-source-link" href={notice.notice_url} target="_blank" rel="noreferrer"><ExternalLink size={14}/>View on {TENDER_SOURCE_LABELS[notice.source] || 'source'}</a>}
+
+    <div className="tender-actions">
+      <label><span>Status</span><select value={lead.status} disabled={!canEdit || busy} onChange={e => act(lead, 'status', {status: e.target.value})}>
+        {LEAD_STATUSES.map(status => <option key={status} value={status}>{statusLabel(status, settings)}</option>)}
+      </select></label>
+      {lead.status === 'dismissed'
+        ? <button disabled={!canEdit || busy} onClick={() => act(lead, 'restore')}><RotateCcw size={15}/>Restore</button>
+        : <>
+          <button disabled={!canEdit || busy || lead.status !== 'to_qualify'} onClick={() => act(lead, 'save')}><Bookmark size={15}/>Save</button>
+          <button disabled={!canEdit || busy || lead.status === 'bidding'} onClick={() => act(lead, 'pursue')}><Rocket size={15}/>Pursue</button>
+          <button disabled={!canEdit || busy} onClick={dismiss}><XCircle size={15}/>Dismiss</button>
+        </>}
+    </div>
+    {!canEdit && <p className="muted">Viewers can read tenders but not change them.</p>}
+    {lead.status === 'dismissed' && lead.dismiss_reason && <p className="tender-dismiss-reason">Dismissed: {lead.dismiss_reason}</p>}
+
+    <section className="tender-why">
+      <h3>Why this score: {lead.score}</h3>
+      {reasons.length ? <ul>{reasons.map(reason => <li key={reason.label}>
+        <span>{reason.label}{reason.matched.length ? `: ${reason.matched.join(', ')}` : ''}</span>
+        <b>{reason.weight === null ? 'Score 0' : `${reason.weight > 0 ? '+' : ''}${reason.weight}`}</b>
+      </li>)}</ul> : <p className="muted">Nothing in your settings matched this notice.</p>}
+    </section>
+
+    <section className="tender-fields">
+      <Field label="Deadline">{formatDeadline(notice.tender_deadline, now)}</Field>
+      <Field label="Value">{formatTenderValue(notice.value_amount, notice.value_currency)}</Field>
+      <Field label="Notice status">{notice.tender_status || 'Not published'}</Field>
+      <Field label="Contract">{notice.contract_start || notice.contract_end ? `${fmtDay(notice.contract_start)} to ${fmtDay(notice.contract_end)}` : 'Not published'}</Field>
+      {isAward && <Field label="Winner">{(notice.award_suppliers || []).map(s => s.name).filter(Boolean).join(', ') || 'Not published'}</Field>}
+      {isAward && <Field label="Contract ends">{fmtDay(notice.contract_end)}</Field>}
+      <Field label="Framework / DPS">{notice.is_framework_or_dps ? 'Yes' : 'No'}</Field>
+      <Field label="CPV codes">{(notice.cpv_codes || []).join(', ') || 'None'}</Field>
+      <Field label="Regions">{(notice.regions || []).join(', ') || 'None'}</Field>
+      <Field label="Postcodes">{(notice.postcodes || []).join(', ') || 'None'}</Field>
+      <Field label="Published">{fmtDay(notice.published_at)}</Field>
+      <Field label="Source">{TENDER_SOURCE_LABELS[notice.source] || notice.source}</Field>
+    </section>
+    {notice.description && <section className="tender-description"><h3>Description</h3><p>{notice.description}</p></section>}
+    <small className="tender-ogl">{OGL_NOTICE}</small>
+  </aside>;
+}
+
+export function TendersPage({cloudEnabled, tenant, session}) {
   const tenantId = tenant?.tenantId;
   const [data, setData] = useState({leads: [], settings: null, runs: []});
   const [loading, setLoading] = useState(false), [error, setError] = useState('');
   const [filters, setFilters] = useState(EMPTY_TENDER_FILTERS);
   const [now, setNow] = useState(() => Date.now());
+  const [selectedOcid, setSelectedOcid] = useState(null), [busyOcid, setBusyOcid] = useState(null);
+  const canEdit = canEditTenantData(tenant);
 
   const load = useCallback(() => {
     if (!cloudEnabled || !tenantId) return;
@@ -117,7 +190,27 @@ export function TendersPage({cloudEnabled, tenant}) {
       .catch(err => setError(`Could not load tenders: ${err.message}`))
       .finally(() => setLoading(false));
   }, [cloudEnabled, tenantId]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setSelectedOcid(null); load(); }, [load]);
+
+  // Optimistic, like updateOutreach: show the change now, roll back if the
+  // update is rejected (including RLS silently matching no row).
+  const act = async (lead, action, options) => {
+    const changes = leadActionChanges(action, options);
+    const before = {status: lead.status, dismiss_reason: lead.dismiss_reason};
+    setData(current => ({...current, leads: applyLeadChanges(current.leads, lead.ocid, changes)}));
+    setBusyOcid(lead.ocid);
+    const {data: rows, error: updateError} = await supabase
+      .from('tender_leads')
+      .update({...changes, updated_by: session.user.id})
+      .eq('tenant_id', tenantId)
+      .eq('ocid', lead.ocid)
+      .select('ocid');
+    setBusyOcid(null);
+    if (updateError || !rows?.length) {
+      setData(current => ({...current, leads: applyLeadChanges(current.leads, lead.ocid, before)}));
+      setError(`Could not update tender: ${updateError?.message || 'you do not have permission to change it'}`);
+    }
+  };
 
   const setFilter = (key, value) => setFilters(current => ({...current, [key]: value}));
   const minScoreToShow = data.settings?.min_score_to_show ?? 0;
@@ -127,6 +220,8 @@ export function TendersPage({cloudEnabled, tenant}) {
     () => filterLeads(data.leads, filters, {now, minScoreToShow}),
     [data.leads, filters, now, minScoreToShow],
   );
+
+  const selectedLead = selectedOcid ? data.leads.find(lead => lead.ocid === selectedOcid) : null;
 
   if (!cloudEnabled) {
     return <section className="tenders-page"><div className="notice">Tenders need a signed-in Site Finder workspace.</div></section>;
@@ -138,14 +233,14 @@ export function TendersPage({cloudEnabled, tenant}) {
       <div><Landmark size={18}/><strong>{visible.length.toLocaleString()} tenders</strong><button className="icon" onClick={load} disabled={loading} aria-label="Refresh tenders"><RefreshCw size={16}/></button></div>
     </div>
     <HealthBanner health={health}/>
-    {error && <div className="notice" role="alert">{error}</div>}
+    {error && <div className="notice" role="alert">{error}<button onClick={() => setError('')} aria-label="Dismiss message"><X size={15}/></button></div>}
     {!data.settings && !loading && <div className="notice">No tender settings for this workspace yet, so nothing is scored. A workspace admin can add keywords, CPV codes and regions.</div>}
     <TenderFilters filters={filters} setFilter={setFilter} regions={regions} clear={() => setFilters(EMPTY_TENDER_FILTERS)}/>
     <div className="tender-table-wrap">
       <table className="tender-table">
         <thead><tr><th>Score</th><th>Title</th><th>Buyer</th><th className="num">Value</th><th>Deadline</th><th>Stage</th><th>Source</th><th>Matched</th></tr></thead>
         <tbody>
-          {visible.map(lead => <LeadRow key={lead.ocid} lead={lead} now={now}/>)}
+          {visible.map(lead => <LeadRow key={lead.ocid} lead={lead} now={now} onOpen={next => setSelectedOcid(next.ocid)}/>)}
           {!visible.length && <tr><td colSpan="8" className="tender-empty">{loading ? 'Loading tenders…' : 'No tenders match these filters.'}</td></tr>}
         </tbody>
       </table>
@@ -155,5 +250,6 @@ export function TendersPage({cloudEnabled, tenant}) {
       {filters.showBelowThreshold && <button type="button" onClick={() => setFilter('showBelowThreshold', false)}>Hide leads below score {minScoreToShow}</button>}
       <small>{OGL_NOTICE}</small>
     </div>
+    {selectedLead && <TenderDrawer lead={selectedLead} settings={data.settings} now={now} canEdit={canEdit} busy={busyOcid === selectedLead.ocid} act={act} close={() => setSelectedOcid(null)}/>}
   </section>;
 }
